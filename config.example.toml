@@ -1,0 +1,24 @@
+listen = "127.0.0.1:8787"
+# Browser origins allowed to read responses: Web dev (3000) and Tauri dev (1420).
+# "tauri://localhost" / "http://tauri.localhost" cover packaged Tauri builds;
+# ["*"] allows every origin (trusted, local-only setups); [] blocks all browsers.
+allowed_origins = ["http://localhost:3000", "http://localhost:1420"]
+
+# Single user. Credentials are either inline (`password` / `token`) or read from
+# an environment variable (`password_env` / `token_env`); set exactly one of the
+# four fields. Username: `username`, else FS_SERVER_USER.
+username = "workbench"
+password_env = "FS_SERVER_PASSWORD"
+# password = "replace-with-at-least-8-bytes"
+# Legacy Bearer client: token_env = "FS_SERVER_TOKEN" (at least 24 bytes, no username).
+
+# Every [[exports]] section exposes one host directory. The client path prefix
+# (alias) defaults to the directory name; set `alias` to override it.
+[[exports]]
+path = "/srv/shared/docs"
+access = "ro"        # default; "rw" takes an exclusive lock for writes
+
+# [[exports]]
+# alias = "demo"
+# path = "/srv/projects/demo"
+# access = "rw"
