@@ -3,7 +3,7 @@
 服务端目前支持 Linux（需要 `openat2`）；Web、Tauri 和 Node CLI 使用同一 HTTP 协议。服务启动时验证目录句柄能力，不支持时拒绝启动。
 
 ```bash
-# 在本项目根目录执行（itookit monorepo 内即 tools/fs-server）
+# 在本项目根目录执行（itookit monorepo 内即 tools/itookit-fs-server，作为 submodule）
 cargo build --release
 # 复制 config.example.toml，设置实际目录、监听地址和允许的 Web/Tauri Origin。
 export FS_SERVER_USER='workbench'
