@@ -12,7 +12,9 @@
 //! closes. The order matters — the file gate is drained before the process is
 //! allowed to exit.
 
+use fs_agent::core::events::emit;
 use fs_agent::{app::State, config::launch, process, router};
+use serde_json::json;
 use std::{sync::Arc, time::Duration};
 
 /// Upper bound on how long shutdown waits for in-flight file work.
@@ -25,7 +27,11 @@ async fn main() -> std::process::ExitCode {
     match run().await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: {error}");
+            emit(
+                fs_agent::core::events::Level::Error,
+                "server.start_failed",
+                json!({"error": error.to_string()}),
+            );
             std::process::ExitCode::FAILURE
         }
     }
@@ -34,18 +40,37 @@ async fn main() -> std::process::ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let path = launch::resolve(std::env::args().nth(1).as_deref())?;
     let config = launch::load(&path)?;
+    fs_agent::core::events::set_level(config.log_level);
     let state = State::from_config(&config)?;
     // Advertise execution only after the sandbox has been proven to work.
     if config.execution {
+        emit(
+            fs_agent::core::events::Level::Debug,
+            "sandbox.probing",
+            json!({}),
+        );
         process::enable(&state).await?;
+        emit(
+            fs_agent::core::events::Level::Info,
+            "sandbox.ready",
+            json!({}),
+        );
     }
     let app = router(state.clone(), &config.allowed_origins)?;
     let listener = tokio::net::TcpListener::bind(&config.listen).await?;
-    eprintln!(
-        "fs-agent listening on {} (config {})",
-        listener.local_addr()?,
-        path.display()
+    emit(
+        fs_agent::core::events::Level::Info,
+        "server.ready",
+        json!({"address": listener.local_addr()?.to_string(), "serverId": state.auth.server_id(),
+        "execution": config.execution, "exportCount": config.exports.len()}),
     );
+    if fs_agent::core::events::enabled(fs_agent::core::events::Level::Info) {
+        eprintln!(
+            "fs-agent listening on {} (config {})",
+            listener.local_addr()?,
+            path.display()
+        );
+    }
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown(state))
         .await?;
@@ -55,7 +80,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// Stop admission, drain file work, then arm a hard exit deadline.
 async fn shutdown(state: Arc<State>) {
     let _ = tokio::signal::ctrl_c().await;
-    eprintln!("fs-agent: shutting down");
+    emit(
+        fs_agent::core::events::Level::Info,
+        "server.stopping",
+        json!({}),
+    );
     state.execution.stop_accepting();
     state.operations.cancel_all();
     state.execution.cancel_all();
@@ -63,12 +92,20 @@ async fn shutdown(state: Arc<State>) {
         .await
         .is_err()
     {
-        eprintln!("fs-agent: file work still in flight after {DRAIN_TIMEOUT:?}");
+        emit(
+            fs_agent::core::events::Level::Warn,
+            "server.drain_timeout",
+            json!({"timeoutMs": DRAIN_TIMEOUT.as_millis()}),
+        );
     }
     // Nothing left to protect; do not wait forever for a stalled client.
     tokio::spawn(async move {
         tokio::time::sleep(CONNECTION_GRACE).await;
-        eprintln!("fs-agent: connection grace elapsed, exiting");
+        emit(
+            fs_agent::core::events::Level::Info,
+            "server.connection_grace_elapsed",
+            json!({}),
+        );
         std::process::exit(0);
     });
 }

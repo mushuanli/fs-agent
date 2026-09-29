@@ -6,6 +6,7 @@
 //! into filesystem or process internals directly.
 
 pub mod access;
+mod events;
 pub mod handlers;
 pub mod query;
 pub mod range;
@@ -86,6 +87,7 @@ pub fn router(state: Arc<State>, origins: &[String]) -> Result<Router, String> {
                 response
             },
         ))
+        .layer(middleware::from_fn(events::failures))
         .with_state(state))
 }
 

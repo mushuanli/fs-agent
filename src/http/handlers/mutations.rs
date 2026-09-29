@@ -76,6 +76,13 @@ pub async fn replace(
         .operations
         .register(identity, &alias, access::operation_id(&headers)?)?;
     let task = operation.clone();
+    let audit = json!({"identity": identity, "alias": alias, "operationId": access::operation_id(&headers)?,
+        "action": "replace", "path": query.path});
+    crate::core::events::emit(
+        crate::core::events::Level::Debug,
+        "mutation.accepted",
+        audit.clone(),
+    );
     let replacement = Replacement {
         state,
         export,
@@ -88,6 +95,7 @@ pub async fn replace(
     // The operation owns the work and its cleanup after the waiter disconnects.
     tokio::spawn(async move {
         let result = replacement.run(body).await;
+        mutation_finished(audit, &result);
         task.finish(result);
     });
     let (status, receipt) = operation.wait(deadline).await;
@@ -183,6 +191,7 @@ pub async fn mutate(
     if command.recursive {
         return Err(Error::unsupported());
     }
+    let audit_paths = json!({"action": command.action, "path": command.path, "to": command.to});
     let change = Change::parse(&command.action, command.path, command.to)?;
     let gate = state.files.shared()?;
     let (identity, export) = access::writable_export(&state, &headers, &alias)?;
@@ -190,6 +199,12 @@ pub async fn mutate(
         .operations
         .register(identity, &alias, access::operation_id(&headers)?)?;
     let task = operation.clone();
+    let audit = json!({"identity": identity, "alias": alias, "operationId": access::operation_id(&headers)?, "change": audit_paths});
+    crate::core::events::emit(
+        crate::core::events::Level::Debug,
+        "mutation.accepted",
+        audit.clone(),
+    );
     tokio::spawn(async move {
         let result = match state.workers.acquire(deadline).await {
             Ok(permit) => {
@@ -207,8 +222,24 @@ pub async fn mutate(
             }
             Err(error) => Err(error),
         };
-        task.finish(result.map(|()| json!({})));
+        let result = result.map(|()| json!({}));
+        mutation_finished(audit, &result);
+        task.finish(result);
     });
     let (status, receipt) = operation.wait(deadline).await;
     Ok((status, Json(receipt)))
+}
+
+fn mutation_finished(operation: Value, result: &Result<Value, Error>) {
+    crate::core::events::emit(
+        if result.is_ok() {
+            crate::core::events::Level::Info
+        } else {
+            crate::core::events::Level::Warn
+        },
+        "mutation.finished",
+        json!({"operation": operation,
+        "outcome": if result.is_ok() { "committed" } else { "not-committed" },
+        "code": result.as_ref().err().map(|error| error.code)}),
+    );
 }

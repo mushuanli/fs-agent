@@ -16,6 +16,22 @@ use std::sync::Arc;
 
 /// Start a command, or return the record of an identical earlier request.
 pub fn start(state: &Arc<State>, identity: usize, request: Request) -> Result<Status, Error> {
+    let id: String = request.request_id.chars().take(128).collect();
+    start_authorized(state, identity, request).map_err(|error| {
+        crate::core::events::emit(
+            crate::core::events::Level::Warn,
+            "process.rejected",
+            serde_json::json!({"requestId": id, "identity": identity, "code": error.code}),
+        );
+        error
+    })
+}
+
+fn start_authorized(
+    state: &Arc<State>,
+    identity: usize,
+    request: Request,
+) -> Result<Status, Error> {
     authorize(state, &request.epoch, &request.request_id)?;
     if state.auth.server_id() != Some(request.server_id.as_str()) {
         return Err(Error::conflict("SERVER_ID_CHANGED"));
@@ -34,6 +50,8 @@ pub fn start(state: &Arc<State>, identity: usize, request: Request) -> Result<St
                 };
                 let prepared = sandbox::assemble(&plan, lock)?;
                 let process = Arc::new(Process::new());
+                crate::core::events::emit(crate::core::events::Level::Debug, "process.accepted", serde_json::json!({"requestId": request.request_id,
+                    "identity": identity, "cwd": plan.cwd, "mountCount": plan.mounts.len(), "timeoutMs": plan.timeout_ms}));
                 // The registered task, not the HTTP waiter, owns spawn and cleanup.
                 tokio::spawn(runner::run(
                     state.clone(),
@@ -41,6 +59,8 @@ pub fn start(state: &Arc<State>, identity: usize, request: Request) -> Result<St
                     process.clone(),
                     gate,
                     plan.timeout_ms,
+                    identity,
+                    request.request_id.clone(),
                 ));
                 Ok(process)
             })?;
@@ -62,7 +82,13 @@ pub fn status(state: &State, identity: usize, epoch: &str, id: &str) -> Result<S
 /// the caller learns the request will not run.
 pub fn cancel(state: &State, identity: usize, epoch: &str, id: &str) -> Result<Status, Error> {
     authorize(state, epoch, id)?;
-    Ok(state.execution.registry().cancel(identity, id)?.status())
+    let status = state.execution.registry().cancel(identity, id)?.status();
+    crate::core::events::emit(
+        crate::core::events::Level::Info,
+        "process.cancel_requested",
+        serde_json::json!({"requestId": id, "identity": identity}),
+    );
+    Ok(status)
 }
 
 /// Shared admission checks: capability, epoch and identifier shape.

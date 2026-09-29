@@ -66,7 +66,7 @@ pnpm --filter @itookit/vfsdriver-http test  # 在 itookit monorepo 内
 
 ## fs-agent 增量接口
 
-`GET /v1/capabilities` 需要认证，返回安装身份及文件/同步/进程/终端支持情况。可在配置顶层指定稳定的 `server_id = "my-agent-node"`；未配置时为 null，旧文件服务继续可用，但不能成为固定的执行目标。默认 `process.exec=false`。配置 `execution = true` 并设置 server_id 后，启动会验证 Linux bubblewrap、fd 挂载及 user namespace 支持，失败即退出。`sync.push`、`terminal.pty` 仍为 false；普通命令不依赖工作区租约模块。
+`GET /v1/capabilities` 需要认证，返回安装身份及文件/同步/进程/终端支持情况。可在配置顶层指定稳定的 `server_id = "my-agent-node"`；未配置时为启用执行的服务生成本次启动的随机节点标识（不保证跨重启不变）。命令执行默认开启，配置顶层 `execution = false` 可切换为纯文件服务。启用执行时，启动会验证 Linux bubblewrap、fd 挂载及 user namespace 支持，失败即退出。`sync.push`、`terminal.pty` 仍为 false；普通命令不依赖工作区租约模块。
 
 `.gitignore` 由 MindOS 客户端文件树处理，服务端列表与文件访问不自动过滤。
 
@@ -104,3 +104,12 @@ MindOS 项目右键菜单选择“启用远程命令”后，File Tools 和 Bash
 进程退出分两级：先停止接收命令、请在工作中的操作停止并等待文件门排空（5 秒），再给已打开的连接 5 秒自行结束，避免慢速下载无限拖住 Ctrl-C。
 
 测试与模块对应：`tests/config.rs`、`tests/fs.rs`、`tests/http/`（按端点分组）、`tests/process.rs`、`tests/workspace.rs`，共享脚手架在 `tests/common/`。
+
+## 日志
+
+顶层 `log_level = "debug"` 为默认值，可设 `trace/debug/info/warn/error/off`。事件输出到 stderr，使用 JSON 行，包含时间、级别、事件名及结构化字段。
+
+- debug：文件变更/命令准入；info：启动就绪、变更提交、命令启动与成功结束、取消和关闭。
+- warn/error：认证拒绝、HTTP 错误、命令非零退出、超时、启动或清理失败；保留操作/请求 ID、状态和退出码。
+- 普通读取、stat、目录列表、能力查询及状态轮询成功时始终静默，包括 trace/debug。读取错误输出 `http.failed`。
+- 不输出 Authorization、口令、请求正文、命令正文或文件内容；命令输出仅记录字节数。进程结束记录是回收后的结果，HTTP 断线不冒充操作已取消。

@@ -6,6 +6,7 @@
 
 pub mod cursor;
 pub mod error;
+pub mod events;
 pub mod gate;
 pub mod ids;
 pub mod workers;

@@ -15,7 +15,14 @@ const MAX_TIMEOUT_MS: u64 = 30_000;
 
 /// Resolve the request identity.
 pub fn identity(state: &State, headers: &HeaderMap) -> Result<usize, Error> {
-    state.auth.identify(headers)
+    state.auth.identify(headers).map_err(|error| {
+        crate::core::events::emit(
+            crate::core::events::Level::Warn,
+            "auth.rejected",
+            serde_json::json!({"code": error.code}),
+        );
+        error
+    })
 }
 
 /// Resolve the identity and prove it may read `alias`.

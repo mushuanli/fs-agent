@@ -1,7 +1,10 @@
 # Optional stable installation identity; keep unchanged across restarts.
 # server_id = "my-agent-node"
-# execution = true  # opt in: Linux bubblewrap with fd mounts; requires server_id
+# Execution is enabled by default and requires working Linux bubblewrap support.
+# execution = false  # explicitly select file-only service
 listen = "127.0.0.1:8787"
+# trace/debug/info/warn/error/off; successful reads stay silent at every level.
+log_level = "debug"
 # Browser origins allowed to read responses: Web dev (3000) and Tauri dev (1420).
 # "tauri://localhost" / "http://tauri.localhost" cover packaged Tauri builds;
 # ["*"] allows every origin (trusted, local-only setups); [] blocks all browsers.

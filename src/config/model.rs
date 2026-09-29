@@ -9,10 +9,12 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub listen: String,
-    /// Stable installation identity; required to advertise process execution.
-    pub server_id: Option<String>,
     #[serde(default)]
+    pub log_level: crate::core::events::Level,
+    pub listen: String,
+    /// Optional stable identity; otherwise an ephemeral node identity is generated.
+    pub server_id: Option<String>,
+    #[serde(default = "execution_enabled")]
     pub execution: bool,
     /// Browser origins allowed to read responses (CORS), not an auth control.
     #[serde(default)]
@@ -24,6 +26,10 @@ pub struct Config {
     pub token_env: Option<String>,
     #[serde(default)]
     pub exports: Vec<ExportConfig>,
+}
+
+fn execution_enabled() -> bool {
+    true
 }
 
 #[derive(Deserialize)]

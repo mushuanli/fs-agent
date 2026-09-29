@@ -33,18 +33,37 @@ pub async fn run(
     process: Arc<Process>,
     gate: OwnedRwLockWriteGuard<()>,
     timeout_ms: u64,
+    identity: usize,
+    request_id: String,
 ) {
+    let started = std::time::Instant::now();
     if process.cancelled() {
         process.cancelled_before_start();
+        crate::core::events::emit(
+            crate::core::events::Level::Info,
+            "process.cancelled_before_start",
+            serde_json::json!({"requestId": request_id, "identity": identity}),
+        );
         return;
     }
     let mut child = match prepared.command.spawn() {
         Ok(child) => child,
-        Err(_) => {
+        Err(error) => {
             process.spawn_failed();
+            crate::core::events::emit(
+                crate::core::events::Level::Error,
+                "process.spawn_failed",
+                serde_json::json!({"requestId": request_id, "identity": identity,
+                "errorKind": format!("{:?}", error.kind()), "osError": error.raw_os_error()}),
+            );
             return;
         }
     };
+    crate::core::events::emit(
+        crate::core::events::Level::Info,
+        "process.started",
+        serde_json::json!({"requestId": request_id, "identity": identity, "pid": child.id()}),
+    );
     // The launcher inherited the descriptors; the parent can let them go.
     drop(prepared.directories);
     let stdout = child.stdout.take().expect("base() pipes stdout");
@@ -56,6 +75,18 @@ pub async fn run(
         Ok((terminal, code)) => {
             let (stdout, stdout_truncated) = drain(out_reader).await;
             let (stderr, stderr_truncated) = drain(err_reader).await;
+            crate::core::events::emit(
+                if terminal == "exited" && code == Some(0) && !stdout_truncated && !stderr_truncated
+                {
+                    crate::core::events::Level::Info
+                } else {
+                    crate::core::events::Level::Warn
+                },
+                "process.finished",
+                serde_json::json!({"requestId": request_id, "identity": identity,
+                "state": terminal, "exitCode": code, "elapsedMs": started.elapsed().as_millis(),
+                "stdoutBytes": stdout.len(), "stderrBytes": stderr.len(), "truncated": stdout_truncated || stderr_truncated}),
+            );
             // The command may have written through a bind mount, so every
             // revision minted before it ran must be considered stale. This
             // happens while the gate is still held.
@@ -75,6 +106,12 @@ pub async fn run(
             state.files.poison();
             drop(gate);
             process.unreaped();
+            crate::core::events::emit(
+                crate::core::events::Level::Error,
+                "process.cleanup_failed",
+                serde_json::json!({"requestId": request_id,
+                "identity": identity, "state": "unknown", "fileGate": "poisoned"}),
+            );
         }
     }
 }

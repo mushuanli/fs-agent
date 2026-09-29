@@ -29,6 +29,11 @@ pub async fn cancel(
     headers: HeaderMap,
 ) -> Result<Json<Value>, Error> {
     let (identity, _) = access::export(&state, &headers, &alias)?;
+    crate::core::events::emit(
+        crate::core::events::Level::Info,
+        "mutation.cancel_requested",
+        serde_json::json!({"identity": identity, "alias": alias, "operationId": id}),
+    );
     Ok(Json(
         state.operations.cancel(identity, &alias, &id)?.status(),
     ))

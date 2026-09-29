@@ -56,7 +56,12 @@ impl State {
             exports.aliases().cloned().collect(),
             writable,
         );
-        Self::new(Auth::new(config.server_id.clone(), vec![client]), exports)
+        let server_id = match &config.server_id {
+            Some(id) => Some(id.clone()),
+            None if config.execution => Some(format!("fs-agent-{}", hex(&random_bytes()?))),
+            None => None,
+        };
+        Self::new(Auth::new(server_id, vec![client]), exports)
     }
 
     /// Assemble the runtime with fresh random material.
@@ -101,9 +106,6 @@ fn validate_identity(config: &Config) -> Result<(), String> {
         if !ids::is_identifier_within(id, ids::IDENTIFIER_MAX) {
             return Err("server_id must contain 1..128 ASCII letters, digits, '-' or '_'".into());
         }
-    }
-    if config.execution && config.server_id.is_none() {
-        return Err("execution requires server_id".into());
     }
     // A username with a token would look like Basic authentication but silently
     // serve Bearer only, so it is rejected instead of ignored.

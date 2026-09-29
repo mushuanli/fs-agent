@@ -203,15 +203,22 @@ fn stable_node_identity_is_explicit_and_validated() {
 }
 
 #[test]
-fn execution_requires_a_stable_server_id() {
+fn execution_defaults_on_with_an_ephemeral_identity_and_can_be_disabled() {
     let _guard = lock();
     let (_root, path) = fixture();
     let base =
         format!("username = \"li\"\npassword = \"12345678\"\n[[exports]]\npath = {path:?}\n");
-    let error = load(&format!("execution = true\n{base}"))
-        .err()
-        .expect("execution without server_id must be rejected");
-    assert!(error.contains("execution requires server_id"), "{error}");
+    let first = load(&base).unwrap();
+    let second = load(&base).unwrap();
+    assert!(first.auth.server_id().unwrap().starts_with("fs-agent-"));
+    assert_ne!(first.auth.server_id(), second.auth.server_id());
+    assert_eq!(
+        load(&format!("execution = false\n{base}"))
+            .unwrap()
+            .auth
+            .server_id(),
+        None
+    );
 }
 
 /// The published process epoch must be independent randomness, never the key
