@@ -107,13 +107,16 @@ fn validate_mount(mounts: &[&Mount], index: usize) -> Result<(), Error> {
     if mounts[..index].iter().any(|other| other.at == mount.at) {
         return Err(Error::invalid());
     }
-    // A read-only mount may not sit inside a writable one of the same export:
-    // that would let the caller bypass the read-only requirement.
+    // Overlapping source trees cannot have both read-only and writable aliases:
+    // either containment direction exposes protected content through a writable path.
     if mount.access == "ro"
         && mounts.iter().copied().any(|other| {
             other.access == "rw"
                 && other.alias == mount.alias
-                && (other.path.is_empty() || inside(&mount.path, &other.path))
+                && (mount.path.is_empty()
+                    || other.path.is_empty()
+                    || inside(&mount.path, &other.path)
+                    || inside(&other.path, &mount.path))
         })
     {
         return Err(Error::forbidden("EROFS"));
@@ -211,4 +214,42 @@ pub fn virtual_path(path: &str) -> Result<(), Error> {
 /// Whether `path` is `root` or lives below it, on a component boundary.
 fn inside(path: &str, root: &str) -> bool {
     path == root || path.starts_with(&format!("{root}/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mount(path: &str, at: &str, access: &str) -> Mount {
+        Mount {
+            alias: "project".into(),
+            path: path.into(),
+            at: at.into(),
+            access: access.into(),
+        }
+    }
+
+    #[test]
+    fn rejects_readonly_source_overlap_in_both_directions() {
+        for (readonly, writable) in [
+            ("", "child"),
+            ("child", ""),
+            ("docs", "docs/sub"),
+            ("docs/sub", "docs"),
+            ("docs", "docs"),
+        ] {
+            let ro = mount(readonly, "/reference", "ro");
+            let rw = mount(writable, "/workspace", "rw");
+            assert!(validate_mount(&[&ro, &rw], 0).is_err());
+            assert!(validate_mount(&[&rw, &ro], 1).is_err());
+        }
+    }
+
+    #[test]
+    fn permits_disjoint_source_trees_on_component_boundaries() {
+        let ro = mount("docs", "/reference", "ro");
+        let rw = mount("docs2", "/workspace", "rw");
+        assert!(validate_mount(&[&ro, &rw], 0).is_ok());
+        assert!(validate_mount(&[&ro, &rw], 1).is_ok());
+    }
 }
