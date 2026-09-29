@@ -1,4 +1,4 @@
-use itookit_vfs_server::config::{Config, State};
+use fs_agent::config::{Config, State};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 // Credential resolution reads the process environment, so the tests serialize.
@@ -48,7 +48,7 @@ fn read_write_access_implies_exclusive_writes() {
     .unwrap();
     assert_eq!(state.clients[0].write_exports, vec!["x1"]);
     assert!(state.exports["x1"].writable());
-    assert!(itookit_vfs_server::filesystem::Export::exclusive(&path).is_err());
+    assert!(fs_agent::filesystem::Export::exclusive(&path).is_err());
 }
 
 #[test]
@@ -171,4 +171,23 @@ fn rejects_an_unknown_access_value() {
         "listen = \"127.0.0.1:0\"\nusername = \"li\"\npassword = \"12345678\"\n[[exports]]\npath = \"/tmp\"\naccess = \"rx\"\n",
     );
     assert!(parsed.is_err());
+}
+
+#[test]
+fn stable_node_identity_is_explicit_and_validated() {
+    let _guard = lock();
+    let (_root, path) = fixture();
+    let config = |id: &str| {
+        format!("server_id = {id:?}\nusername = \"li\"\npassword = \"12345678\"\n[[exports]]\npath = {path:?}\n")
+    };
+    assert_eq!(
+        load(&config("my-node")).unwrap().server_id.as_deref(),
+        Some("my-node")
+    );
+    assert_eq!(
+        load(&config("my-node")).unwrap().server_id.as_deref(),
+        Some("my-node")
+    );
+    assert!(load(&config("../other-node")).is_err());
+    assert!(load(&config("")).is_err());
 }

@@ -10,6 +10,7 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub listen: String,
+    pub server_id: Option<String>,
     #[serde(default)]
     pub allowed_origins: Vec<String>,
     pub username: Option<String>,
@@ -42,6 +43,7 @@ pub struct Client {
     pub write_exports: Vec<String>,
 }
 pub struct State {
+    pub server_id: Option<String>,
     pub exports: BTreeMap<String, Arc<Export>>,
     pub clients: Vec<Client>,
     pub workers: Arc<tokio::sync::Semaphore>,
@@ -51,12 +53,25 @@ pub struct State {
 
 impl Config {
     pub fn state(&self) -> Result<Arc<State>, String> {
+        if let Some(id) = &self.server_id {
+            if id.is_empty()
+                || id.len() > 128
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return Err(
+                    "server_id must contain 1..128 ASCII letters, digits, '-' or '_'".into(),
+                );
+            }
+        }
         let exports = self.open_exports()?;
         let client = self.client(&exports)?;
         let mut cursor_key = [0; 32];
         getrandom::getrandom(&mut cursor_key)
             .map_err(|_| "Random source unavailable".to_owned())?;
         Ok(Arc::new(State {
+            server_id: self.server_id.clone(),
             exports,
             clients: vec![client],
             cursor_key,

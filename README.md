@@ -1,15 +1,15 @@
-# itookit-vfs-server — HTTP 文件服务
+# fs-agent — HTTP 文件服务
 
 服务端目前支持 Linux（需要 `openat2`）；Web、Tauri 和 Node CLI 使用同一 HTTP 协议。服务启动时验证目录句柄能力，不支持时拒绝启动。
 
 ```bash
-# 在本项目根目录执行（itookit monorepo 内即 tools/itookit-fs-server，作为 submodule）
+# 在本项目根目录执行（itookit monorepo 内即 tools/fs-agent，作为 submodule）
 cargo build --release
 # 复制 config.example.toml，设置实际目录、监听地址和允许的 Web/Tauri Origin。
 export FS_SERVER_USER='workbench'
 export FS_SERVER_PASSWORD='替换为至少8字节的密码'
-target/release/itookit-vfs-server                     # 自动读取 config.toml
-target/release/itookit-vfs-server /path/to/config.toml # 也可显式指定
+target/release/fs-agent                     # 自动读取 config.toml
+target/release/fs-agent /path/to/config.toml # 也可显式指定
 ```
 
 配置只有一个用户和一串导出目录：
@@ -63,3 +63,9 @@ pnpm --filter @itookit/vfsdriver-http test  # 在 itookit monorepo 内
 驱动测试在 Linux 启动真实 Rust 服务，验证协议、条件保存和 VFS 适配；其他平台跳过该服务端集成测试。设计和验收边界见 [设计文档](../../doc/design/vfs-http-driver.md)。
 
 包含远程来源的项目显示独立远程图标。服务断线时，仅关联项目的整个抽屉及内部项置灰禁用，其他项目继续可用；Settings 的重连入口保持可用。恢复连接后解除禁用。
+
+## fs-agent 增量接口
+
+`GET /v1/capabilities` 需要认证，返回安装身份及文件/同步/进程/终端支持情况。可在配置顶层指定稳定的 `server_id = "my-agent-node"`；未配置时为 null，旧文件服务继续可用，但不能成为固定的执行目标。当前 `sync.push`、`process.exec`、`terminal.pty` 均为 false，不提供远程 Bash。工作区租约模块已有 owner/token hash/generation 的持久 fencing 与重启撤销测试，尚未装配进程路由。
+
+`.gitignore` 由 MindOS 客户端文件树处理，服务端列表与文件访问不自动过滤。

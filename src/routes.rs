@@ -101,3 +101,18 @@ pub async fn entries(
         json!({"entries":entries, "nextCursor":next, "warnings":warnings}),
     ))
 }
+
+/// Support discovery is authenticated and never substitutes for per-directory grants.
+pub async fn capabilities(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, Error> {
+    let client = &state.clients[request::identity(&state, &headers)?];
+    Ok(Json(json!({
+        "version": 1, "serverId": state.server_id,
+        "files": { "read": !client.exports.is_empty(), "write": !client.write_exports.is_empty() },
+        "sync": { "push": false }, "process": { "exec": false }, "terminal": { "pty": false },
+        "executionModel": "none", "workspaceConsistency": "none",
+        "readOnlyEnforcement": "none", "pathModel": "none"
+    })))
+}

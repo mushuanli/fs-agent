@@ -2,12 +2,12 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use http_body_util::BodyExt;
-use itookit_vfs_server::{
+use fs_agent::{
     config::{Client, State},
     filesystem::Export,
     router,
 };
+use http_body_util::BodyExt;
 use std::{collections::BTreeMap, sync::Arc};
 use tower::ServiceExt;
 
@@ -16,6 +16,7 @@ fn app(root: &std::path::Path) -> axum::Router {
 }
 fn app_export(export: Export) -> axum::Router {
     let state = Arc::new(State {
+        server_id: Some("test-node".into()),
         exports: BTreeMap::from([("docs".into(), Arc::new(export))]),
         clients: vec![Client {
             token: "test-secret-at-least-24-bytes".into(),
@@ -407,6 +408,7 @@ async fn password_clients_authenticate_with_basic_without_bearer_fallback() {
     use base64::{engine::general_purpose::STANDARD, Engine};
     let root = tempfile::tempdir().unwrap();
     let state = Arc::new(State {
+        server_id: Some("test-node".into()),
         exports: BTreeMap::from([(
             "docs".into(),
             Arc::new(Export::open(root.path().to_str().unwrap()).unwrap()),
@@ -457,4 +459,31 @@ async fn password_clients_authenticate_with_basic_without_bearer_fallback() {
             .unwrap();
         assert_eq!(response.status(), expected);
     }
+}
+
+#[tokio::test]
+async fn support_discovery_is_authenticated_and_files_only() {
+    let root = tempfile::tempdir().unwrap();
+    let server = app(root.path());
+    let response = server
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = server
+        .oneshot(request("/v1/capabilities").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["serverId"], "test-node");
+    assert_eq!(value["process"]["exec"], false);
+    assert_eq!(value["sync"]["push"], false);
 }

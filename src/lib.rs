@@ -10,6 +10,7 @@ mod recovery;
 mod request;
 mod revision;
 mod routes;
+pub mod workspaces;
 
 use axum::{
     extract::DefaultBodyLimit,
@@ -42,6 +43,7 @@ pub fn router(state: Arc<config::State>, origins: &[String]) -> Result<Router, S
             HeaderName::from_static("etag"),
         ]);
     Ok(Router::new()
+        .route("/v1/capabilities", get(routes::capabilities))
         .route("/v1/exports", get(routes::exports))
         .route("/v1/fs/:alias/stat", post(routes::stat))
         .route("/v1/fs/:alias/entries", get(routes::entries))

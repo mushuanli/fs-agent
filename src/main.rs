@@ -1,4 +1,4 @@
-use itookit_vfs_server::{launch, router};
+use fs_agent::{launch, router};
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
@@ -18,7 +18,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = router(state.clone(), &config.allowed_origins)?;
     let listener = tokio::net::TcpListener::bind(&config.listen).await?;
     eprintln!(
-        "vfs-server listening on {} (config {})",
+        "fs-agent listening on {} (config {})",
         listener.local_addr()?,
         path.display()
     );

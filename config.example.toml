@@ -1,3 +1,5 @@
+# Optional stable installation identity; keep unchanged across restarts.
+# server_id = "my-agent-node"
 listen = "127.0.0.1:8787"
 # Browser origins allowed to read responses: Web dev (3000) and Tauri dev (1420).
 # "tauri://localhost" / "http://tauri.localhost" cover packaged Tauri builds;
