@@ -1,4 +1,4 @@
-use fs_agent::config::{Config, State};
+use fs_agent::{app::State, config::Config};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 // Credential resolution reads the process environment, so the tests serialize.
@@ -12,7 +12,8 @@ fn lock() -> MutexGuard<'static, ()> {
 
 fn load(body: &str) -> Result<Arc<State>, String> {
     let text = format!("listen = \"127.0.0.1:0\"\n{body}");
-    toml::from_str::<Config>(&text).unwrap().state()
+    let config: Config = toml::from_str(&text).unwrap();
+    State::from_config(&config)
 }
 
 /// A temporary directory plus a valid child directory to export.
@@ -31,11 +32,11 @@ fn derives_alias_from_path_and_defaults_to_read_only() {
         "username = \"li\"\npassword = \"12345678\"\n[[exports]]\npath = \"{path}\"\n"
     ))
     .unwrap();
-    assert_eq!(state.clients.len(), 1);
-    assert_eq!(state.clients[0].username.as_deref(), Some("li"));
-    assert_eq!(state.clients[0].exports, vec!["x1"]);
-    assert!(state.clients[0].write_exports.is_empty());
-    assert!(!state.exports["x1"].writable());
+    let client = &state.auth.clients()[0];
+    assert_eq!(client.username(), Some("li"));
+    assert_eq!(client.exports(), ["x1"]);
+    assert!(!client.can_write());
+    assert!(!state.exports.get("x1").unwrap().writable());
 }
 
 #[test]
@@ -46,9 +47,9 @@ fn read_write_access_implies_exclusive_writes() {
         "username = \"li\"\npassword = \"12345678\"\n[[exports]]\npath = \"{path}\"\naccess = \"rw\"\n"
     ))
     .unwrap();
-    assert_eq!(state.clients[0].write_exports, vec!["x1"]);
-    assert!(state.exports["x1"].writable());
-    assert!(fs_agent::filesystem::Export::exclusive(&path).is_err());
+    assert!(state.auth.clients()[0].may_write("x1"));
+    assert!(state.exports.get("x1").unwrap().writable());
+    assert!(fs_agent::fs::Export::exclusive(std::path::Path::new(&path)).is_err());
 }
 
 #[test]
@@ -59,7 +60,7 @@ fn explicit_alias_overrides_the_directory_name() {
         "username = \"li\"\npassword = \"12345678\"\n[[exports]]\nalias = \"ds\"\npath = \"{path}\"\n"
     ))
     .unwrap();
-    assert_eq!(state.clients[0].exports, vec!["ds"]);
+    assert_eq!(state.auth.clients()[0].exports(), ["ds"]);
 }
 
 #[test]
@@ -70,7 +71,19 @@ fn token_clients_use_bearer_without_a_username() {
         "token = \"token-at-least-24-bytes-long\"\n[[exports]]\npath = \"{path}\"\n"
     ))
     .unwrap();
-    assert!(state.clients[0].username.is_none());
+    assert!(state.auth.clients()[0].username().is_none());
+}
+
+#[test]
+fn token_clients_reject_a_username_that_would_look_like_basic_auth() {
+    let _guard = lock();
+    let (_root, path) = fixture();
+    let error = load(&format!(
+        "username = \"li\"\ntoken = \"token-at-least-24-bytes-long\"\n[[exports]]\npath = \"{path}\"\n"
+    ))
+    .err()
+    .expect("a token plus username must be rejected");
+    assert!(error.contains("username"), "{error}");
 }
 
 #[test]
@@ -82,8 +95,9 @@ fn environment_variants_still_resolve() {
         "username = \"dave\"\npassword_env = \"FS_SERVER_TEST_PASSWORD\"\n[[exports]]\npath = \"{path}\"\n"
     ))
     .unwrap();
-    assert_eq!(state.clients[0].username.as_deref(), Some("dave"));
-    assert_eq!(state.clients[0].token, "environment-password-12");
+    let client = &state.auth.clients()[0];
+    assert_eq!(client.username(), Some("dave"));
+    assert_eq!(client.secret(), "environment-password-12");
 }
 
 #[test]
@@ -181,13 +195,40 @@ fn stable_node_identity_is_explicit_and_validated() {
         format!("server_id = {id:?}\nusername = \"li\"\npassword = \"12345678\"\n[[exports]]\npath = {path:?}\n")
     };
     assert_eq!(
-        load(&config("my-node")).unwrap().server_id.as_deref(),
-        Some("my-node")
-    );
-    assert_eq!(
-        load(&config("my-node")).unwrap().server_id.as_deref(),
+        load(&config("my-node")).unwrap().auth.server_id(),
         Some("my-node")
     );
     assert!(load(&config("../other-node")).is_err());
     assert!(load(&config("")).is_err());
+}
+
+#[test]
+fn execution_requires_a_stable_server_id() {
+    let _guard = lock();
+    let (_root, path) = fixture();
+    let base =
+        format!("username = \"li\"\npassword = \"12345678\"\n[[exports]]\npath = {path:?}\n");
+    let error = load(&format!("execution = true\n{base}"))
+        .err()
+        .expect("execution without server_id must be rejected");
+    assert!(error.contains("execution requires server_id"), "{error}");
+}
+
+/// The published process epoch must be independent randomness, never the key
+/// that signs pagination cursors.
+#[test]
+fn process_epoch_is_independent_of_the_cursor_key() {
+    let _guard = lock();
+    let (_root, path) = fixture();
+    let body =
+        format!("username = \"li\"\npassword = \"12345678\"\n[[exports]]\npath = \"{path}\"\n");
+    let first = load(&body).unwrap();
+    let second = load(&body).unwrap();
+    let key_hex: String = first
+        .cursor_key
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_ne!(first.execution.epoch(), key_hex);
+    assert_ne!(first.execution.epoch(), second.execution.epoch());
 }

@@ -1,101 +1,35 @@
+//! `fs-agent` — an authenticated HTTP file service with optional remote command
+//! execution.
+//!
+//! # Layout
+//!
+//! The crate is organised so that each layer answers one question, and policy
+//! is separated from mechanism throughout:
+//!
+//! | module | question it answers |
+//! |---|---|
+//! | [`core`] | what are the shared primitives (errors, ids, gates, workers)? |
+//! | [`config`] | what did the operator ask for, and is it valid? |
+//! | [`app`] | how is that wiredup into runtime state? |
+//! | [`auth`] | who is calling, and what may they touch? |
+//! | [`fs`] | what may a path be, and how is a directory operated on? |
+//! | [`operations`] | has this write already been applied? |
+//! | [`process`] | may a command run, and how is it sandboxed and reaped? |
+//! | [`workspace`] | durable lease fencing (policy + journal mechanism) |
+//! | [`http`] | how is all of that exposed over HTTP? |
+//!
+//! Dependencies point downwards only: `http` depends on the domain modules,
+//! never the reverse, and [`core`] depends on nothing but the standard library
+//! and foundational crates.
+
+pub mod app;
+pub mod auth;
 pub mod config;
-mod content;
-mod cursor;
-mod error;
-pub mod filesystem;
-pub mod launch;
-mod mutations;
+pub mod core;
+pub mod fs;
+pub mod http;
 pub mod operations;
-mod recovery;
-mod request;
-mod revision;
-mod routes;
-pub mod workspaces;
+pub mod process;
+pub mod workspace;
 
-use axum::{
-    extract::DefaultBodyLimit,
-    http::{HeaderName, HeaderValue, Method},
-    middleware,
-    routing::{get, post},
-    Router,
-};
-use std::sync::Arc;
-use tower_http::cors::{AllowOrigin, CorsLayer};
-
-pub fn router(state: Arc<config::State>, origins: &[String]) -> Result<Router, String> {
-    let headers = [
-        "authorization",
-        "content-type",
-        "range",
-        "if-range",
-        "if-match",
-        "x-timeout-ms",
-        "x-operation-id",
-        "if-none-match",
-    ]
-    .map(HeaderName::from_static);
-    let cors = CorsLayer::new()
-        .allow_origin(allow_origin(origins)?)
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::OPTIONS])
-        .allow_headers(headers)
-        .expose_headers([
-            HeaderName::from_static("content-range"),
-            HeaderName::from_static("etag"),
-        ]);
-    Ok(Router::new()
-        .route("/v1/capabilities", get(routes::capabilities))
-        .route("/v1/exports", get(routes::exports))
-        .route("/v1/fs/:alias/stat", post(routes::stat))
-        .route("/v1/fs/:alias/entries", get(routes::entries))
-        .route(
-            "/v1/fs/:alias/content",
-            get(content::content).put(mutations::replace),
-        )
-        .route("/v1/fs/:alias/mutate", post(mutations::mutate))
-        .route("/v1/fs/:alias/operations/:id", get(operations::status))
-        .route(
-            "/v1/fs/:alias/operations/:id/cancel",
-            post(operations::cancel),
-        )
-        .layer(DefaultBodyLimit::max(128 * 1024))
-        .layer(cors)
-        .layer(middleware::map_response(
-            |mut response: axum::response::Response| async move {
-                response
-                    .headers_mut()
-                    .insert("cache-control", HeaderValue::from_static("no-store"));
-                response
-            },
-        ))
-        .with_state(state))
-}
-
-/// `["*"]` allows every browser origin; otherwise entries must match exactly.
-fn allow_origin(origins: &[String]) -> Result<AllowOrigin, String> {
-    if origins.iter().any(|origin| origin == "*") {
-        return Ok(AllowOrigin::any());
-    }
-    let values = origins
-        .iter()
-        .map(|value| {
-            value
-                .parse::<HeaderValue>()
-                .map_err(|_| format!("Invalid CORS origin {value:?}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(AllowOrigin::list(values))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::allow_origin;
-
-    #[test]
-    fn wildcard_and_exact_origins_are_accepted() {
-        assert!(allow_origin(&["*".to_owned()]).is_ok());
-        assert!(allow_origin(&["*".to_owned(), "http://localhost:3000".to_owned()]).is_ok());
-        assert!(allow_origin(&["http://localhost:3000".to_owned()]).is_ok());
-        assert!(allow_origin(&[]).is_ok());
-        assert!(allow_origin(&["http://bad\norigin".to_owned()]).is_err());
-    }
-}
+pub use http::router;
