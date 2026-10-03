@@ -26,6 +26,7 @@ pub struct Config {
     pub token_env: Option<String>,
     #[serde(default)]
     pub exports: Vec<ExportConfig>,
+    pub sync: Option<crate::sync::Config>,
 }
 
 fn execution_enabled() -> bool {

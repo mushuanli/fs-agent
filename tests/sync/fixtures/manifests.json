@@ -1,0 +1,12 @@
+[
+  {
+    "name": "empty",
+    "canonical": "{\"entries\":[],\"format\":\"fs-agent.files\",\"version\":1}",
+    "sha256": "a469965a571e5e11927cc021ad0f8435f750f09e661da2cff723c5a1ee6f3be3"
+  },
+  {
+    "name": "unicode",
+    "canonical": "{\"entries\":[{\"kind\":\"directory\",\"path\":\"笔记\"}],\"format\":\"fs-agent.files\",\"version\":1}",
+    "sha256": "bcde98ea39bcb117e99d3c3a6765acb047081a2fb72ab4c117cbcbc824de8c49"
+  }
+]

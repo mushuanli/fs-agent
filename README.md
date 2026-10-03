@@ -66,7 +66,7 @@ pnpm --filter @itookit/vfsdriver-http test  # 在 itookit monorepo 内
 
 ## fs-agent 增量接口
 
-`GET /v1/capabilities` 需要认证，返回安装身份及文件/同步/进程/终端支持情况。可在配置顶层指定稳定的 `server_id = "my-agent-node"`；未配置时为启用执行的服务生成本次启动的随机节点标识（不保证跨重启不变）。命令执行默认开启，配置顶层 `execution = false` 可切换为纯文件服务。启用执行时，启动会验证 Linux bubblewrap、fd 挂载及 user namespace 支持，失败即退出。`sync.push`、`terminal.pty` 仍为 false；普通命令不依赖工作区租约模块。
+`GET /v1/capabilities` 需要认证，返回安装身份及文件/同步/进程/终端支持情况。可在配置顶层指定稳定的 `server_id = "my-agent-node"`；未配置时为启用执行的服务生成本次启动的随机节点标识（不保证跨重启不变）。命令执行默认开启，配置顶层 `execution = false` 可切换为纯文件服务。启用执行时，启动会验证 Linux bubblewrap、fd 挂载及 user namespace 支持，失败即退出。`sync.push` 在同步服务开启且健康时为 true，详细能力通过 `/v1/sync/capabilities` 查询；`terminal.pty` 仍为 false；普通命令不依赖工作区租约模块。
 
 `.gitignore` 由 MindOS 客户端文件树处理，服务端列表与文件访问不自动过滤。
 
@@ -83,6 +83,10 @@ MindOS 项目右键菜单选择“启用远程命令”后，File Tools 和 Bash
 
 验收：`FS_AGENT_PROCESS_TEST=1 cargo test`（要求可创建 Linux user/PID/network namespace）。
 
+## 项目多端同步
+
+同步存储、配置、管理员备份恢复与 HTTP 协议见 [单节点同步存储](doc/sync.md)。纯同步实例可使用 [config.sync.example.toml](config.sync.example.toml)，无需配置 export；首次启动前显式运行 `fs-agent sync init CONFIG`。同步库与 export 使用独立目录，不自动发布工作目录的变化。
+
 ## 代码结构
 
 依赖只向下：`http` 依赖领域模块，领域模块依赖 `core`；策略与机制分开放在不同文件里。
@@ -95,6 +99,7 @@ MindOS 项目右键菜单选择“启用远程命令”后，File Tools 和 Bash
 | `auth.rs` | 身份解析与别名读写授权 |
 | `fs/` | 路径策略、目录能力（openat2）、revision、结构化修改、原子上传、启动恢复 |
 | `operations/` | 幂等写入收据：ID 复用、保留期与容量、取消语义、等待与超时 |
+| `sync/` | SQLite 持久元数据、不可变对象、条件发布、历史恢复、读取保护、GC 与停机灾备 |
 | `process/` | 准入 `execution`、请求策略 `policy`、bubblewrap 机制 `sandbox`、监管 `runner`、API `service` |
 | `workspace/` | 工作区租约：策略 `lease` 与原子日志机制 `journal`（独立可选，未接入路由） |
 | `http/` | 路由与 CORS、请求边界策略 `access`、`range` 解析、各端点 handler |
@@ -103,7 +108,7 @@ MindOS 项目右键菜单选择“启用远程命令”后，File Tools 和 Bash
 
 进程退出分两级：先停止接收命令、请在工作中的操作停止并等待文件门排空（5 秒），再给已打开的连接 5 秒自行结束，避免慢速下载无限拖住 Ctrl-C。
 
-测试与模块对应：`tests/config.rs`、`tests/fs.rs`、`tests/http/`（按端点分组）、`tests/process.rs`、`tests/workspace.rs`，共享脚手架在 `tests/common/`。
+测试与模块对应：`tests/config.rs`、`tests/fs.rs`、`tests/http/`（按端点分组）、`tests/process.rs`、`tests/workspace.rs`、`tests/sync/`，共享脚手架在 `tests/common/`。
 
 ## 日志
 

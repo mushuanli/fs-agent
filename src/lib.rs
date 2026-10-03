@@ -30,6 +30,7 @@ pub mod fs;
 pub mod http;
 pub mod operations;
 pub mod process;
+pub mod sync;
 pub mod workspace;
 
 pub use http::router;

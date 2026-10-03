@@ -29,7 +29,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 const MAX_JSON_BODY: usize = 512 * 1024;
 
 /// Headers a browser client may send; anything else fails the CORS preflight.
-const ALLOWED_HEADERS: [&str; 8] = [
+const ALLOWED_HEADERS: [&str; 9] = [
     "authorization",
     "content-type",
     "range",
@@ -38,6 +38,7 @@ const ALLOWED_HEADERS: [&str; 8] = [
     "if-none-match",
     "x-timeout-ms",
     "x-operation-id",
+    "x-sync-history-epoch",
 ];
 
 pub fn router(state: Arc<State>, origins: &[String]) -> Result<Router, String> {
@@ -49,6 +50,14 @@ pub fn router(state: Arc<State>, origins: &[String]) -> Result<Router, String> {
             HeaderName::from_static("content-range"),
             HeaderName::from_static("etag"),
         ]);
+    let sync = Router::new()
+        .route(
+            "/v1/sync/*path",
+            get(crate::sync::transport::get)
+                .post(crate::sync::transport::post)
+                .put(crate::sync::transport::put),
+        )
+        .layer(DefaultBodyLimit::disable());
     Ok(Router::new()
         .route(
             "/v1/capabilities",
@@ -77,6 +86,7 @@ pub fn router(state: Arc<State>, origins: &[String]) -> Result<Router, String> {
             post(handlers::processes::cancel),
         )
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY))
+        .merge(sync)
         .layer(cors)
         // File content and metadata must never be cached by an intermediary.
         .layer(middleware::map_response(

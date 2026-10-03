@@ -38,7 +38,11 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let path = launch::resolve(std::env::args().nth(1).as_deref())?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|s| s == "sync") {
+        return fs_agent::sync::admin(&args[1..]).map_err(Into::into);
+    }
+    let path = launch::resolve(args.first().map(String::as_str))?;
     let config = launch::load(&path)?;
     fs_agent::core::events::set_level(config.log_level);
     let state = State::from_config(&config)?;
@@ -55,6 +59,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             "sandbox.ready",
             json!({}),
         );
+    }
+    if let Some(sync) = &state.sync {
+        sync.start_maintenance();
     }
     let app = router(state.clone(), &config.allowed_origins)?;
     let listener = tokio::net::TcpListener::bind(&config.listen).await?;
@@ -85,9 +92,13 @@ async fn shutdown(state: Arc<State>) {
         "server.stopping",
         json!({}),
     );
+    if let Some(sync) = &state.sync {
+        sync.stop();
+    }
     state.execution.stop_accepting();
     state.operations.cancel_all();
     state.execution.cancel_all();
+    drain_sync(&state).await;
     if tokio::time::timeout(DRAIN_TIMEOUT, state.files.drain())
         .await
         .is_err()
@@ -108,4 +119,19 @@ async fn shutdown(state: Arc<State>) {
         );
         std::process::exit(0);
     });
+}
+
+async fn drain_sync(state: &State) {
+    let Some(storage) = state.sync.clone() else {
+        return;
+    };
+    let work = tokio::task::spawn_blocking(move || storage.drain_timeout(DRAIN_TIMEOUT));
+    match tokio::time::timeout(DRAIN_TIMEOUT, work).await {
+        Ok(Ok(Ok(()))) => {}
+        result => emit(
+            fs_agent::core::events::Level::Warn,
+            "sync.drain_failed",
+            json!({"result":format!("{result:?}"),"recoveryRequired":true}),
+        ),
+    }
 }

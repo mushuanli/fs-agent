@@ -37,31 +37,19 @@ pub struct State {
     pub workers: Workers,
     pub operations: Operations,
     pub execution: Execution,
+    pub sync: Option<Arc<crate::sync::SyncService>>,
 }
 
 impl State {
     /// Validate a parsed configuration and build the runtime.
     pub fn from_config(config: &Config) -> Result<Arc<Self>, String> {
         validate_identity(config)?;
-        let exports = open_exports(&config.exports)?;
-        let credentials = resolve_credentials(config)?;
-        let writable = exports
-            .iter()
-            .filter(|(_, export)| export.writable())
-            .map(|(alias, _)| alias.clone())
-            .collect();
-        let client = Client::new(
-            credentials.secret,
-            credentials.username,
-            exports.aliases().cloned().collect(),
-            writable,
-        );
-        let server_id = match &config.server_id {
-            Some(id) => Some(id.clone()),
-            None if config.execution => Some(format!("fs-agent-{}", hex(&random_bytes()?))),
-            None => None,
-        };
-        Self::new(Auth::new(server_id, vec![client]), exports)
+        let sync = open_sync(config)?;
+        let exports = configured_exports(config)?;
+        let auth = configured_auth(config, &exports)?;
+        let mut state = Self::new(auth, exports)?;
+        Arc::get_mut(&mut state).unwrap().sync = sync;
+        Ok(state)
     }
 
     /// Assemble the runtime with fresh random material.
@@ -77,6 +65,7 @@ impl State {
             workers: Workers::new(WORKER_LIMIT),
             operations: Operations::default(),
             execution: Execution::new(hex(&random_bytes()?)),
+            sync: None,
         }))
     }
 
@@ -96,8 +85,50 @@ impl State {
             workers: Workers::new(WORKER_LIMIT),
             operations: Operations::default(),
             execution: Execution::new(process_epoch),
+            sync: None,
         })
     }
+}
+
+fn open_sync(config: &Config) -> Result<Option<Arc<crate::sync::SyncService>>, String> {
+    config
+        .sync
+        .as_ref()
+        .filter(|s| s.enabled)
+        .map(|c| {
+            crate::sync::SyncService::validate_isolation(c, config)?;
+            crate::sync::SyncService::open(c)
+        })
+        .transpose()
+        .map_err(|e| e.to_string())
+}
+fn configured_exports(config: &Config) -> Result<Exports, String> {
+    let pure_sync = config.sync.as_ref().is_some_and(|s| s.enabled) && !config.execution;
+    if pure_sync && config.exports.is_empty() {
+        Ok(Exports::new(std::collections::BTreeMap::new()))
+    } else {
+        open_exports(&config.exports)
+    }
+}
+fn configured_auth(config: &Config, exports: &Exports) -> Result<Auth, String> {
+    let credentials = resolve_credentials(config)?;
+    let writable = exports
+        .iter()
+        .filter(|(_, e)| e.writable())
+        .map(|(alias, _)| alias.clone())
+        .collect();
+    let client = Client::new(
+        credentials.secret,
+        credentials.username,
+        exports.aliases().cloned().collect(),
+        writable,
+    );
+    let server_id = match &config.server_id {
+        Some(id) => Some(id.clone()),
+        None if config.execution => Some(format!("fs-agent-{}", hex(&random_bytes()?))),
+        None => None,
+    };
+    Ok(Auth::new(server_id, vec![client]))
 }
 
 /// Reject configurations that cannot be served safely.
