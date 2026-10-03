@@ -25,7 +25,7 @@ impl SyncService {
             policy::id(request)?;
             let hash = text(body, "manifestHash")?;
             policy::hash(hash)?;
-            let tx = db.transaction()?;
+            let tx = self.transaction(db)?;
             self.project(&tx, project, false)?;
             if let Some(pin) = self.existing_pin(&tx, project, request, hash)? {
                 return Ok(pin);
@@ -51,7 +51,7 @@ impl SyncService {
     pub fn pin_action(&self, project: &str, id: &str, action: &str) -> Result<Value> {
         self.with_write(|db| {
             policy::id(id)?;
-            let tx = db.transaction()?;
+            let tx = self.transaction(db)?;
             self.project(&tx, project, false)?;
             let pin = m::get::<Value>(&tx, project, "pin", id)?;
             if action == "release" {
@@ -124,14 +124,15 @@ impl SyncService {
                 return Err(Error::new("CLOCK_REGRESSION", 503));
             }
             let roots = self.roots(db)?;
-            let tx = db.transaction()?;
+            let tx = self.transaction(db)?;
             let count = self.mark_gc(&tx, &roots)?;
             m::put(&tx, "", "info", "clock", &self.time())?;
             self.commit(tx)?;
             super::fault::point("after-gc-mark");
             self.finish_gc(db)?;
             self.prune(db)?;
-            Ok(json!({"deletedObjects":count}))
+            let compacted = self.compact(db)?;
+            Ok(json!({"deletedObjects":count,"compactedRecords":compacted}))
         })
     }
     fn mark_gc(&self, db: &Connection, roots: &BTreeSet<(String, String)>) -> Result<u64> {
@@ -222,7 +223,7 @@ impl SyncService {
     }
     pub(super) fn recover(&self) -> Result<()> {
         let mut db = self.connection()?;
-        let tx = db.transaction()?;
+        let tx = self.transaction(&mut db)?;
         tx.execute("UPDATE records SET value=json_set(value,'$.receipt',json(?2),'$.finishedAt',?3)
             WHERE scope=?1 AND kind='operation' AND json_extract(value,'$.receipt.state')='pending'",
             (self.epoch(),json!({"outcome":"not-committed","code":"SERVER_RESTART","status":409}).to_string(),self.time()))?;

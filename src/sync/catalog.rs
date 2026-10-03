@@ -47,7 +47,7 @@ impl SyncService {
             dataset,
         )?;
         let event = json!({"sequence":p.sequence.to_string(),"type":kind,"dataset":dataset,
-            "previousHead":prior,"projectLifecycleRevision":p.lifecycle_revision,"operation":operation_identity(body)?});
+            "recordedAt":self.time(),"previousHead":prior,"projectLifecycleRevision":p.lifecycle_revision,"operation":operation_identity(body)?});
         m::put(
             db,
             project,
@@ -70,7 +70,7 @@ impl SyncService {
             "change",
             &format!("{:020}", p.sequence),
             &json!({"sequence":p.sequence.to_string(),
-            "type":kind,"projectLifecycleRevision":p.lifecycle_revision,"operation":operation_identity(body)?}),
+            "type":kind,"recordedAt":self.time(),"projectLifecycleRevision":p.lifecycle_revision,"operation":operation_identity(body)?}),
         )
     }
     fn increment(&self, db: &Connection, project: &str) -> Result<Project> {
@@ -87,8 +87,26 @@ impl SyncService {
         last: &str,
         state: &str,
     ) -> Result<String> {
+        self.encode_cursor_until(
+            project,
+            kind,
+            upper,
+            last,
+            state,
+            self.time() + self.config.read_pin_seconds,
+        )
+    }
+    pub(super) fn encode_cursor_until(
+        &self,
+        project: &str,
+        kind: &str,
+        upper: u64,
+        last: &str,
+        state: &str,
+        expires: u64,
+    ) -> Result<String> {
         let payload = json!({"epoch":self.epoch(),"namespace":self.identity.namespace_id,"project":project,"kind":kind,
-            "upper":upper,"last":last,"state":state,"expires":self.time()+self.config.read_pin_seconds});
+            "upper":upper,"last":last,"state":state,"expires":expires});
         let bytes = serde_json::to_vec(&payload)?;
         let mut mac = Hmac::<Sha256>::new_from_slice(self.identity.cursor_key.as_bytes())
             .map_err(|_| Error::storage())?;
@@ -158,15 +176,18 @@ impl SyncService {
                 .as_ref()
                 .and_then(|t| t["last"].as_str())
                 .unwrap_or("");
+            self.check_change_floor(db, project, upper)?;
+            let expires = token.as_ref().and_then(|t| t["expires"].as_u64())
+                .unwrap_or(self.time()+self.config.read_pin_seconds);
             let mut items = m::catalog(db, project, upper, last, state, limit + 1)?;
             let more = items.len() > limit;
             items.truncate(limit);
             let last = items.last().map(|d| d.dataset_id.as_str()).unwrap_or(last);
-            let receipt = self.encode_cursor(project, "catalog", upper, last, state)?;
+            let receipt = self.encode_cursor_until(project, "catalog", upper, last, state, expires)?;
             Ok(
                 json!({"datasets":items,"catalogRevision":upper.to_string(),"cursor":receipt,
             "nextCursor":if more {Some(&receipt)} else {None},
-            "changesCursor":self.encode_cursor(project,"changes",upper,&upper.to_string(),"all")?}),
+            "changesCursor":self.encode_cursor_until(project,"changes",upper,&upper.to_string(),"all",expires)?}),
             )
         })
     }
@@ -177,6 +198,7 @@ impl SyncService {
                 .map(|c| self.decode_cursor(c, project, "changes"))
                 .transpose()?;
             let (after, upper) = change_window(token.as_ref(), p.sequence)?;
+            self.check_change_floor(db, project, after)?;
             let limit = limit.clamp(1, 1000);
             let low = format!("{after:020}");
             let high = format!("{upper:020}");
@@ -188,10 +210,16 @@ impl SyncService {
             } else {
                 upper.to_string()
             };
+            let expires = if more {
+                token.as_ref().and_then(|t| t["expires"].as_u64())
+            } else {
+                None
+            }
+            .unwrap_or(self.time() + self.config.read_pin_seconds);
             let values: Vec<_> = events.into_iter().map(|(_, v)| v).collect();
             Ok(
                 json!({"changes":values,"upper":upper.to_string(),"hasMore":more,
-            "cursor":self.encode_cursor(project,"changes",upper,&last,"all")?}),
+            "cursor":self.encode_cursor_until(project,"changes",upper,&last,"all",expires)?}),
             )
         })
     }
@@ -334,8 +362,8 @@ impl SyncService {
         let cursor = self.decode_cursor(text(body, "cursor")?, project, "changes")?;
         let revision = policy::number(text(body, "scopeRevision")?)?;
         self.with_write(|db| {
-            let tx = db.transaction()?;
-            self.project(&tx, project, false)?;
+            let tx = self.transaction(db)?;
+            self.check_change_floor(&tx, project, policy::number(text(&cursor, "last")?)?)?;
             let mut device: Replica = m::require(&tx, self.epoch(), "replica", replica)?;
             if !policy::replica_active(&device, self.time(), self.config.replica_expiry_seconds) {
                 return Err(Error::new("REPLICA_EXPIRED", 410));

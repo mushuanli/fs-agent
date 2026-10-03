@@ -46,6 +46,7 @@ pub fn validate(c: &Config) -> Result<()> {
         c.operation_retention_seconds,
         c.replica_expiry_seconds,
         c.read_pin_seconds,
+        c.change_retention_seconds,
         c.max_projects as u64,
         c.max_datasets as u64,
         c.max_replicas as u64,
@@ -72,8 +73,10 @@ fn validate_bounds(c: &Config) -> Result<()> {
         c.operation_retention_seconds,
         c.replica_expiry_seconds,
         c.read_pin_seconds,
+        c.change_retention_seconds,
     ];
     if seconds.iter().any(|s| *s > 315360000)
+        || c.change_retention_seconds < c.read_pin_seconds
         || c.read_pin_seconds > 86400
         || c.upload_ttl_seconds > 604800
         || c.max_object_bytes > 4294967296
@@ -95,4 +98,9 @@ pub fn overlap(a: &Path, b: &Path) -> bool {
 
 pub fn replica_active(replica: &Replica, time: u64, expiry: u64) -> bool {
     replica.state == "active" && replica.last_seen.saturating_add(expiry) > time
+}
+
+// Preserve a full cursor lifetime after an event leaves the change retention window.
+pub(super) fn change_cutoff(time: u64, retention: u64, cursor_ttl: u64) -> u64 {
+    time.saturating_sub(retention.saturating_add(cursor_ttl))
 }

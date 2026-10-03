@@ -15,6 +15,36 @@ target/release/fs-agent /path/to/config.toml
 
 同步与执行可以同时启用，但同步库不得与 export、只读运行库及其实际目录别名重叠。启动会拒绝重叠目录。数据库和对象库必须位于支持 SQLite WAL、文件锁、硬链接和 fsync 的本地文件系统。
 
+两个 example 是同一个 fs-agent 二进制的部署示例，不是两个不同服务。普通文件、执行和同步可以在一个进程、一个端口上同时提供：在普通配置中增加以下段即可，现有 exports 保留。纯同步示例则明确关闭 execution 并省略 exports。若选择启动两个进程，必须使用不同 listen 地址或端口；同一 sync.root 只能由一个实例独占打开。
+
+```toml
+[sync]
+enabled = true
+root = "/srv/fs-agent-sync"
+```
+
+除通用监听与认证配置外，sync 只需显式启用并配置私有存储路径。其余参数都有内置默认值；示例不再重复全部默认值。默认对象容量预算为 10 GiB、单对象上限 256 MiB、历史与回收窗口 30 天、changes 窗口 7 天，适合先采用默认配置再按实际容量调整。principal_id 与 namespace_id 默认分别为 owner、personal，它们是单账号存储身份，不是由 exports 的目录名派生；启用后的有效限额可通过同步 capabilities 查询。
+
+### 项目标识与本地目录映射
+
+普通 export 通过 alias 区分，默认 alias 来自目录最后一层名称，也可以显式覆盖。sync 则通过 namespaceId、projectId、datasetId 区分，使用 manifest 内的相对路径保存文件树；不按本地目录末级名称自动识别项目，也不把客户端绝对路径当作云端身份。
+
+一个 itookit 项目对应一个本地工作目录，云端对应一个独立项目目录。不同项目分别创建 projectId，分别存储，不能因为末级目录同名而自动合并。只有用户明确选择拉取或绑定同一个云端项目时，多个设备的本地工作目录才对应同一云端 projectId。项目中的 src/main.ts、docs/guide.md 等相对路径完整保留；客户端选择的本地根目录及其上级路径不需要上传，本地目录改名不改变项目身份。
+
+当前正式对象已经按项目物理分目录，而不是把不同项目的内容混在一个全局对象目录：
+
+```text
+sync.root/
+├── metadata.db
+└── objects/personal/
+    ├── project-A/    # Content objects belonging to project A
+    └── project-B/    # Content objects belonging to project B
+```
+
+project-A 与 project-B 内分别保存该项目的文件、会话和附件对象；相同摘要也不跨项目合并。元数据库、上传暂存及服务锁由实例共享，元数据查询和变更按项目作用域隔离。配置只指定一个 sync.root，项目目录由服务自动管理，无需逐项目增加 TOML 配置。
+
+服务端对象实际位于 sync.root/objects/namespaceId/projectId/hash 前缀/hash，并非可直接浏览编辑的项目目录镜像。用户选择本地根目录与云端项目的绑定应由 itookit 客户端管理；当前 fs-agent 已提供项目/数据集协议，尚未交付 itookit 的目录绑定 UI 或项目同步客户端。路径式云端展示可以作为客户端导航，但不是当前协议中的服务器目录映射接口。
+
 管理员操作需要停机，并使用同一个 `sync.lock`；另一实例持锁时命令失败。备份和恢复目的目录必须为空，且不能与源目录重叠。
 
 ```bash
@@ -108,7 +138,7 @@ manifest 通过同一 PUT 接口上传，使用 JCS 的受限 schema：固定 AS
 
 drain 只在停止准入后调用，跟踪接收中的上传、blocking 工作、后台变更和异步清理；超时明确返回 SYNC_DRAIN_TIMEOUT。进程记录 sync.drain_failed 后按退出期限结束，剩余意图由重启恢复，不能将超时当作成功排空。
 
-历史与 catalog 索引保守保留；首版未压缩所有旧索引或身份记录，达到 max_metadata_records 时拒绝增长。该限额同时覆盖 records、对象、manifest 引用和上传记录。副本过期后不得原地激活，应注册新副本并对账。正文可回收，身份 tombstone 和序号高水位独立保留。
+changes 与重复 catalog 快照按窗口压缩；历史版本目录及身份记录仍保守保留，达到 max_metadata_records 时拒绝增长。该限额同时覆盖 records、对象、manifest 引用和上传记录。副本过期后不得原地激活，应注册新副本并对账。正文可回收，身份 tombstone 和序号高水位独立保留。
 
 ## 实现与验收
 
@@ -126,3 +156,22 @@ python3 scripts/sync-smoke.py target/debug/fs-agent
 ```
 
 sync-fault-injection 是显式测试 feature，默认构建不读取故障环境变量。它覆盖准入、发布提交、安装、GC、修复和恢复中断，以及回滚/回执写失败和提交已成功但结果不确定的分类。故障子进程测试串行运行，避免 fork 期间暂时继承其他测试的 root 锁；CAS 测试仍显式创建竞争线程。库内正确性测试另包含实际 SQLite FULL、锁内门禁、只读 verify 和流式关闭/取消。真实 HTTP 脚本包含 A/B/C 条件发布、回执去重、原 root 不可用时的空目录恢复、旧 epoch 查询/取消/重试隔离及受保护版本的摘要校验。进程退出和逻辑 I/O 故障不代表真实断电验收。
+
+
+## 发现索引压缩与性能诊断
+
+`change_retention_seconds` 默认 604800 秒，必须不小于 `read_pin_seconds`。GC 仅压缩带有可靠 recordedAt 的连续事件前缀，实际回收阈值为事件时间加 changes 保留窗口，再加一个完整游标 TTL。旧存储中缺少时间戳的事件形成保守屏障，不猜测提交时间。历史内容、历史版本目录、副本身份、operation-id 和删除标记的保留规则不受该设置影响。
+
+每次 GC 的发现索引清理最多删除 2000 行，单项目每类最多 1000 行。项目 changeFloor、事件删除和 catalog 压缩在同一事务提交。catalog 保留边界及之前每个数据集最后一份快照，包括已删除成员，并保留边界之后全部快照。正常分页的原到期时间保持不变；游标低于清理边界时，catalog、changes、ACK 和 activate 都返回 CURSOR_EXPIRED，客户端重新枚举成员、全量对账。没有 cursor 的 changes 请求在前缀已经清理后同样返回该错误，不能静默提供不完整日志。
+
+`SyncService::diagnostics()` 提供进程内累计次数、纳秒总量和最大值：lockWait、lockHold、transaction、commit。transaction 包含 BEGIN 到 COMMIT 或错误回滚；commit 单列提交耗时。正常维护每分钟在 debug 日志中输出 sync.diagnostics。指标为近似并发采样，重启清零，不增加 HTTP 管理入口。
+
+可重复的局部负载入口：
+
+```bash
+cargo test --all-features --offline --lib sync_publish_diagnostics -- --ignored --nocapture --test-threads=1
+```
+
+该负载使用两个约 124 KB 的 manifest、1000 个文件路径共享同一内容对象、100 次真实版本发布与 4 个并发读取线程。发布按唯一摘要检查和保存引用，同摘要不同长度的清单拒绝；不会改变 head/版本/事件/回执的原子事务。它专门测量共享对象场景，不代表大量独有对象、大文件上传或生产磁盘的性能。
+
+历史摘要及防重放身份仍按原契约保留，因此总元数据并非无限可增长。配额达到上限时仍拒绝新增长；本次没有通过清理身份记录来放宽防重放保证，也没有执行自动 VACUUM 压缩数据库文件。

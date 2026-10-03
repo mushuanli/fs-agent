@@ -17,6 +17,7 @@ pub struct SyncService {
     pub config: Config,
     pub(super) identity: Identity,
     pub(super) db: Mutex<Connection>,
+    metrics: super::metrics::Metrics,
     _lock: File,
     pub(super) tasks: Arc<super::coordination::Coordination>,
     pub(super) healthy: AtomicBool,
@@ -140,6 +141,7 @@ impl SyncService {
             config: config.clone(),
             identity,
             db: Mutex::new(db),
+            metrics: Default::default(),
             _lock: lock,
             tasks: Arc::default(),
             healthy: AtomicBool::new(true),
@@ -178,15 +180,37 @@ impl SyncService {
         }
         Ok(())
     }
-    pub(super) fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        self.db.lock().map_err(|_| Error::storage())
+    pub(super) fn connection(&self) -> Result<super::metrics::LockedConnection<'_>> {
+        let started = std::time::Instant::now();
+        let guard = self.db.lock().map_err(|_| Error::storage())?;
+        self.metrics.wait.record(started);
+        Ok(super::metrics::LockedConnection {
+            guard,
+            started: std::time::Instant::now(),
+            sample: &self.metrics.hold,
+        })
     }
-    pub(super) fn commit(&self, tx: rusqlite::Transaction<'_>) -> Result<()> {
+    pub(super) fn transaction<'a>(
+        &'a self,
+        db: &'a mut Connection,
+    ) -> Result<super::metrics::TimedTransaction<'a>> {
+        let started = std::time::Instant::now();
+        let inner = Some(db.transaction()?);
+        Ok(super::metrics::TimedTransaction {
+            inner,
+            started,
+            metrics: &self.metrics,
+        })
+    }
+    pub(super) fn commit(&self, tx: super::metrics::TimedTransaction<'_>) -> Result<()> {
         if tx.commit().is_err() {
             self.mark_uncertain();
             return Err(Error::storage());
         }
         Ok(())
+    }
+    pub fn diagnostics(&self) -> Value {
+        self.metrics.value()
     }
     pub fn capabilities(&self) -> Value {
         json!({"protocolVersion":1,"authorityId":self.identity.authority_id,"historyEpoch":self.epoch(),
@@ -219,6 +243,13 @@ impl SyncService {
                 }
                 let task = service.clone();
                 let result = tokio::task::spawn_blocking(move || task.gc()).await;
+                if crate::core::events::enabled(crate::core::events::Level::Debug) {
+                    crate::core::events::emit(
+                        crate::core::events::Level::Debug,
+                        "sync.diagnostics",
+                        service.diagnostics(),
+                    );
+                }
                 if let Ok(Err(error)) = result {
                     if error.unknown {
                         service.mark_uncertain();
@@ -347,12 +378,6 @@ impl SyncService {
     ) -> Result<()> {
         let parsed = self.validate_manifest(db, project, hash, kind)?;
         for reference in parsed.refs {
-            self.ready(
-                db,
-                project,
-                &reference.hash,
-                Some(policy::number(&reference.size)?),
-            )?;
             db.execute(
                 "INSERT OR IGNORE INTO manifest_refs VALUES (?1,?2,?3)",
                 (project, hash, reference.hash),
@@ -453,7 +478,7 @@ impl SyncService {
             if size > self.config.max_object_bytes {
                 return Err(Error::new("LIMIT_EXCEEDED", 413));
             }
-            let tx = db.transaction()?;
+            let tx = self.transaction(db)?;
             self.project(&tx, project, true)?;
             self.quota(&tx, size)?;
             let id = random_id()?;
@@ -478,7 +503,7 @@ impl SyncService {
         self.project(db, &project, true)?;
         self.install_file(&project, &hash, id, size)?;
         super::fault::point("after-object-install");
-        let tx = db.transaction()?;
+        let tx = self.transaction(db)?;
         self.quota_for(&tx, 0, 0)?;
         let until = self.time() + self.config.upload_ttl_seconds;
         tx.execute("INSERT INTO objects VALUES (?1,?2,?3,'ready',?4) ON CONFLICT(project,hash) DO UPDATE SET retain_until=MAX(retain_until,excluded.retain_until)",(&project,&hash,size,until))?;

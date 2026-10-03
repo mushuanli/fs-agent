@@ -2,9 +2,11 @@
 mod admin;
 mod catalog;
 mod commands;
+mod compaction;
 mod coordination;
 mod fault;
 mod manifest;
+mod metrics;
 mod model;
 mod operations;
 mod policy;

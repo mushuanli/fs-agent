@@ -29,3 +29,10 @@ access = "ro"        # default; "rw" takes an exclusive lock for writes
 # alias = "demo"
 # path = "/srv/projects/demo"
 # access = "rw"
+
+# Optional sync storage in the same process and on the same listening port.
+# Keep this private root separate from all exports and sandbox runtime mounts.
+# Initialize it once: fs-agent sync init /path/to/config.toml
+# [sync]
+# enabled = true
+# root = "/srv/fs-agent-sync"

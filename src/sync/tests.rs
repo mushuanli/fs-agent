@@ -152,7 +152,7 @@ fn accepted_command_can_finish_after_shutdown_stops_admission() {
     let task = s.clone();
     let worker = std::thread::spawn(move || {
         task.with_write(|db| {
-            let tx = db.transaction()?;
+            let tx = task.transaction(db)?;
             started.send(()).unwrap();
             worker_barrier.wait();
             m::put(&tx, "", "info", "finished", &json!(true))?;
@@ -578,4 +578,228 @@ fn committed_change_and_receipt_share_one_typed_operation_identity() {
     let receipt = s.operation("A", "2").unwrap();
     let changes = s.changes("p", None, 100).unwrap();
     assert_eq!(changes["changes"][0]["operation"], receipt["operation"]);
+}
+
+fn discovery_fixture(s: &SyncService, count: u64, aged: u64) {
+    let mut db = s.connection().unwrap();
+    let tx = s.transaction(&mut db).unwrap();
+    let mut p: Project = m::require(&tx, "", "project", "p").unwrap();
+    let dataset = Dataset {
+        dataset_id: "files".into(),
+        kind: "files".into(),
+        logical_id: "files".into(),
+        state: "deleted".into(),
+        head: Head {
+            generation: "1".into(),
+            manifest_hash: digest(b"fixture"),
+        },
+        recoverable_until: None,
+    };
+    let old = s.time() - s.config.change_retention_seconds - s.config.read_pin_seconds - 10;
+    for seq in 1..=count {
+        m::put(
+            &tx,
+            "p",
+            "change",
+            &format!("{seq:020}"),
+            &json!({"sequence":seq.to_string(),"recordedAt":if seq<=aged {old} else {s.time()}}),
+        )
+        .unwrap();
+        m::put(&tx, "p", "catalog", &format!("{seq:020}/files"), &dataset).unwrap();
+    }
+    m::put(&tx, "p", "dataset", "files", &dataset).unwrap();
+    p.sequence = count;
+    m::put(&tx, "", "project", "p", &p).unwrap();
+    s.commit(tx).unwrap();
+}
+
+#[test]
+fn compaction_preserves_catalog_snapshots_tombstones_and_replay_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let s = service(root.path());
+    project(&s);
+    discovery_fixture(&s, 20, 15);
+    let cursor = s.encode_cursor("p", "catalog", 18, "", "all").unwrap();
+    let before = s.catalog("p", Some(&cursor), "all", 10).unwrap();
+    let count = s.gc().unwrap()["compactedRecords"].as_u64().unwrap();
+    assert_eq!(count, 29); // 15 events and 14 redundant snapshots.
+    assert_eq!(
+        s.catalog("p", Some(&cursor), "all", 10).unwrap()["datasets"],
+        before["datasets"]
+    );
+    assert_eq!(s.changes("p", None, 10).unwrap_err().code, "CURSOR_EXPIRED");
+    let stale = s.encode_cursor("p", "catalog", 14, "", "all").unwrap();
+    assert_eq!(
+        s.catalog("p", Some(&stale), "all", 10).unwrap_err().code,
+        "CURSOR_EXPIRED"
+    );
+    let resume = s.encode_cursor("p", "changes", 15, "15", "all").unwrap();
+    assert_eq!(
+        s.changes("p", Some(&resume), 10).unwrap()["changes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    let stale_changes = s.encode_cursor("p", "changes", 14, "14", "all").unwrap();
+    assert_eq!(
+        s.ack(
+            "p",
+            "A",
+            &json!({"cursor":stale_changes,"scopeRevision":"1"})
+        )
+        .unwrap_err()
+        .code,
+        "CURSOR_EXPIRED"
+    );
+    s.register(&json!({"replicaId":"B"})).unwrap();
+    assert_eq!(
+        s.activate("B", &json!({"scopes":[{"projectId":"p","cursor":stale}]}))
+            .unwrap_err()
+            .code,
+        "CURSOR_EXPIRED"
+    );
+    let current = s.catalog("p", None, "all", 10).unwrap();
+    s.activate(
+        "B",
+        &json!({"scopes":[{"projectId":"p","cursor":current["cursor"]}]}),
+    )
+    .unwrap();
+    let db = s.connection().unwrap();
+    assert_eq!(m::count(&db, "p", "catalog").unwrap(), 6);
+    assert_eq!(
+        m::require::<Dataset>(&db, "p", "dataset", "files")
+            .unwrap()
+            .state,
+        "deleted"
+    );
+    assert_eq!(m::count(&db, s.epoch(), "operation-id").unwrap(), 1);
+}
+
+#[test]
+fn compaction_is_bounded_atomic_and_respects_legacy_timestamp_barriers() {
+    let root = tempfile::tempdir().unwrap();
+    let s = service(root.path());
+    project(&s);
+    discovery_fixture(&s, 2500, 2500);
+    {
+        let db = s.connection().unwrap();
+        let mut second = s.project(&db, "p", false).unwrap();
+        second.project_id = "p2".into();
+        m::put(&db, "", "project", "p2", &second).unwrap();
+        db.execute(
+            "INSERT INTO records SELECT 'p2',kind,key,value FROM records WHERE scope='p'",
+            [],
+        )
+        .unwrap();
+    }
+    {
+        let db = s.connection().unwrap();
+        db.execute("CREATE TRIGGER fail_floor BEFORE UPDATE ON records WHEN NEW.kind='project' BEGIN SELECT RAISE(ABORT,'fault'); END",[]).unwrap();
+        drop(db);
+        assert!(s.with_write(|db| s.compact(db)).is_err());
+        let db = s.connection().unwrap();
+        assert_eq!(m::count(&db, "p", "change").unwrap(), 2500);
+        assert_eq!(m::count(&db, "p", "catalog").unwrap(), 2500);
+        assert_eq!(s.project(&db, "p", false).unwrap().change_floor, 0);
+        db.execute("DROP TRIGGER fail_floor", []).unwrap();
+    }
+    // A write I/O/SQL failure closes admission; reopening performs recovery.
+    drop(s);
+    let s = SyncService::open(&config(root.path())).unwrap();
+    assert_eq!(s.gc().unwrap()["compactedRecords"], 2000);
+    {
+        let db = s.connection().unwrap();
+        assert_eq!(m::count(&db, "p", "change").unwrap(), 1500);
+        assert_eq!(s.project(&db, "p", false).unwrap().change_floor, 1000);
+        db.execute("UPDATE records SET value=json_remove(value,'$.recordedAt') WHERE kind='change' AND key='00000000000000001001'",[]).unwrap();
+    }
+    s.gc().unwrap();
+    assert_eq!(
+        s.project(&s.connection().unwrap(), "p", false)
+            .unwrap()
+            .change_floor,
+        1000
+    );
+}
+
+#[test]
+fn catalog_pagination_keeps_original_expiry_and_recent_events_survive_gc() {
+    let root = tempfile::tempdir().unwrap();
+    let s = service(root.path());
+    project(&s);
+    discovery_fixture(&s, 4, 0);
+    let expiry = s.time() + 30;
+    let cursor = s
+        .encode_cursor_until("p", "catalog", 4, "", "all", expiry)
+        .unwrap();
+    let page = s.catalog("p", Some(&cursor), "all", 1).unwrap();
+    let renewed = s
+        .decode_cursor(page["cursor"].as_str().unwrap(), "p", "catalog")
+        .unwrap();
+    assert_eq!(renewed["expires"], expiry);
+    assert_eq!(s.gc().unwrap()["compactedRecords"], 0);
+    let mut invalid = config(root.path());
+    invalid.change_retention_seconds = invalid.read_pin_seconds - 1;
+    assert_eq!(
+        super::policy::validate(&invalid).unwrap_err().code,
+        "INVALID_SYNC_CONFIG"
+    );
+}
+
+#[test]
+#[ignore = "diagnostic workload, run explicitly with --nocapture"]
+fn sync_publish_diagnostics() {
+    let root = tempfile::tempdir().unwrap();
+    let s = service(root.path());
+    project(&s);
+    let content = object(&s, b"content");
+    let mut entries: Vec<_> = (0..1000)
+        .map(|i| json!({"kind":"file","path":format!("file-{i:04}.txt"),"hash":content,"size":"7"}))
+        .collect();
+    let bytes =
+        serde_json::to_vec(&json!({"entries":entries,"format":"fs-agent.files","version":1}))
+            .unwrap();
+    let hash = object(&s, &bytes);
+    entries.last_mut().unwrap()["path"] = json!("file-9999.txt");
+    let next_bytes =
+        serde_json::to_vec(&json!({"entries":entries,"format":"fs-agent.files","version":1}))
+            .unwrap();
+    let alternate = object(&s, &next_bytes);
+    assert_eq!(
+        s.command(
+            "projects/p/datasets",
+            &command(
+                &s,
+                2,
+                json!({"datasetId":"files","kind":"files","logicalId":"files","manifestHash":hash})
+            ),
+            false
+        )
+        .unwrap()["outcome"],
+        "committed"
+    );
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            let s = &s;
+            scope.spawn(move || {
+                for _ in 0..200 {
+                    s.head("p", "files").unwrap();
+                }
+            });
+        }
+        for seq in 3..=102 {
+            let head = s.head("p", "files").unwrap();
+            let next = if seq % 2 == 1 { &alternate } else { &hash };
+            let result=s.command("projects/p/datasets/files/publish",&command(&s,seq,json!({"expectedHead":{"generation":head["generation"],"manifestHash":head["manifestHash"]},"nextManifestHash":next})),false).unwrap();
+            assert_eq!(result["outcome"], "committed", "{result}");
+        }
+    });
+    let diagnostics = s.diagnostics();
+    assert!(diagnostics["transaction"]["count"].as_u64().unwrap() > 100);
+    println!(
+        "manifestBytes={}, files=1000, publishes=100, readers=4: {}",
+        bytes.len(),
+        diagnostics
+    );
 }

@@ -86,6 +86,7 @@ pub struct Config {
     pub operation_retention_seconds: u64,
     pub replica_expiry_seconds: u64,
     pub read_pin_seconds: u64,
+    pub change_retention_seconds: u64,
     pub metadata_reserve_bytes: u64,
     pub max_projects: usize,
     pub max_datasets: usize,
@@ -112,6 +113,7 @@ impl Default for Config {
             operation_retention_seconds: 604800,
             replica_expiry_seconds: 7776000,
             read_pin_seconds: 900,
+            change_retention_seconds: 604800,
             metadata_reserve_bytes: 1073741824,
             max_projects: 1000,
             max_datasets: 10000,
@@ -141,6 +143,8 @@ pub struct Project {
     pub deleted_at: Option<u64>,
     pub recoverable_until: Option<u64>,
     pub sequence: u64,
+    #[serde(default)]
+    pub change_floor: u64,
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

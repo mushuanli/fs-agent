@@ -40,6 +40,7 @@ impl SyncService {
             deleted_at: None,
             recoverable_until: None,
             sequence: 0,
+            change_floor: 0,
         };
         m::put(db, "", "project", id, &project)?;
         Ok(serde_json::to_value(project)?)

@@ -9,24 +9,6 @@ allowed_origins = ["http://localhost:3000", "http://localhost:1420"]
 [sync]
 enabled = true
 root = "/srv/fs-agent-sync"
-principal_id = "owner"
-namespace_id = "personal"
-# Set this after initialization to detect accidental storage replacement.
+# All other sync settings use built-in defaults; override only when needed.
+# Optional: detect accidental storage replacement after initialization.
 # expected_authority_id = "<authorityId from sync capabilities>"
-max_object_bytes = 268435456
-max_manifest_bytes = 8388608
-max_manifest_entries = 100000
-max_retained_bytes = 10737418240
-max_concurrent_uploads = 4
-upload_ttl_seconds = 86400
-history_retention_seconds = 2592000
-trash_retention_seconds = 2592000
-operation_retention_seconds = 604800
-replica_expiry_seconds = 7776000
-read_pin_seconds = 900
-metadata_reserve_bytes = 1073741824
-max_projects = 1000
-max_datasets = 10000
-max_replicas = 1000
-max_pins = 10000
-max_metadata_records = 1000000

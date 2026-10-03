@@ -66,7 +66,7 @@ fn files(bytes: &[u8], config: &Config) -> Result<Validated> {
         return Err(invalid());
     }
     let mut paths = BTreeMap::new();
-    let mut refs = Vec::new();
+    let mut refs = BTreeMap::new();
     let mut previous = String::new();
     for entry in files.entries {
         let (path, file) = split_entry(entry);
@@ -75,14 +75,26 @@ fn files(bytes: &[u8], config: &Config) -> Result<Validated> {
         previous = path.clone();
         paths.insert(path, file.is_some());
         if let Some(reference) = file {
-            valid_ref(&reference)?;
-            refs.push(reference);
+            insert_reference(&mut refs, reference)?;
         }
     }
     Ok(Validated {
         format: files.format,
-        refs,
+        refs: refs
+            .into_iter()
+            .map(|(hash, size)| Reference { hash, size })
+            .collect(),
     })
+}
+fn insert_reference(refs: &mut BTreeMap<String, String>, reference: Reference) -> Result<()> {
+    valid_ref(&reference)?;
+    if refs
+        .insert(reference.hash, reference.size.clone())
+        .is_some_and(|size| size != reference.size)
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 fn split_entry(entry: Entry) -> (String, Option<Reference>) {
     match entry {
@@ -160,6 +172,22 @@ fn invalid() -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_file_objects_are_checked_once_and_inconsistent_sizes_are_rejected() {
+        let hash = "a".repeat(64);
+        for (size, expected) in [("1", true), ("2", false)] {
+            let bytes = serde_json::to_vec(&serde_json::json!({"entries":[
+                {"kind":"file","path":"a","hash":hash,"size":"1"},
+                {"kind":"file","path":"b","hash":hash,"size":size}],
+                "format":"fs-agent.files","version":1}))
+            .unwrap();
+            let result = validate(&bytes, &Config::default());
+            assert_eq!(result.is_ok(), expected);
+            if let Ok(parsed) = result {
+                assert_eq!(parsed.refs.len(), 1);
+            }
+        }
+    }
     #[test]
     fn rejects_noncanonical_duplicate_and_traversal() {
         for source in [

@@ -52,7 +52,7 @@ impl SyncService {
         })
     }
     fn admit(&self, db: &mut Connection, request: &Request<'_>) -> Result<Option<Value>> {
-        let tx = db.transaction()?;
+        let tx = self.transaction(db)?;
         if let Some(record) = m::get::<Value>(&tx, self.epoch(), "operation", &request.key)? {
             if record["requestHash"] != request.hash {
                 return Err(Error::new("OPERATION_REUSED", 409));
@@ -112,7 +112,7 @@ impl SyncService {
         request: &Request<'_>,
         cancel: bool,
     ) -> Result<Value> {
-        let tx = db.transaction()?;
+        let tx = self.transaction(db)?;
         tx.execute_batch("SAVEPOINT command")?;
         let result = if cancel {
             Err(Error::new("CANCELLED", 409))
@@ -245,7 +245,7 @@ impl SyncService {
         self.with_write(|db| {
             let replica = text(body, "replicaId")?;
             policy::id(replica)?;
-            let tx = db.transaction()?;
+            let tx = self.transaction(db)?;
             if let Some(device) = m::get::<Replica>(&tx, self.epoch(), "replica", replica)? {
                 return Ok(replica_value(
                     &device,
@@ -294,14 +294,16 @@ impl SyncService {
             return Err(Error::new("RECONCILIATION_REQUIRED", 409));
         }
         for scope in scopes {
-            self.decode_cursor(text(scope, "cursor")?, text(scope, "projectId")?, "catalog")?;
+            let project = text(scope, "projectId")?;
+            let cursor = self.decode_cursor(text(scope, "cursor")?, project, "catalog")?;
+            self.check_change_floor(db, project, cursor["upper"].as_u64().unwrap_or(0))?;
         }
         Ok(())
     }
     pub fn activate(&self, replica: &str, body: &Value) -> Result<Value> {
         self.with_write(|db| {
             policy::id(replica)?;
-            let tx = db.transaction()?;
+            let tx = self.transaction(db)?;
             let mut device: Replica = m::require(&tx, self.epoch(), "replica", replica)?;
             if device.state != "reconciling" {
                 return Err(Error::new("REPLICA_EXPIRED", 410));
