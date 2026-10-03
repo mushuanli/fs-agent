@@ -95,10 +95,16 @@ fn open_sync(config: &Config) -> Result<Option<Arc<crate::sync::SyncService>>, S
         .sync
         .as_ref()
         .filter(|s| s.enabled)
-        .map(|c| {
-            crate::sync::SyncService::validate_isolation(c, config)?;
-            crate::sync::SyncService::open(c)
-        })
+        .map(
+            |c| -> Result<Arc<crate::sync::SyncService>, crate::sync::Error> {
+                crate::sync::SyncService::validate_isolation(c, config)?;
+                let service = crate::sync::SyncService::open(c)?;
+                // A missing root is created by open; re-check the resolved path
+                // against the exports now that it exists.
+                crate::sync::SyncService::validate_isolation(c, config)?;
+                Ok(service)
+            },
+        )
         .transpose()
         .map_err(|e| e.to_string())
 }

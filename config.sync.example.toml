@@ -9,6 +9,7 @@ allowed_origins = ["http://localhost:3000", "http://localhost:1420"]
 [sync]
 enabled = true
 root = "/srv/fs-agent-sync"
+# A missing or empty root is initialized on first start; `sync init` does it explicitly.
 # All other sync settings use built-in defaults; override only when needed.
-# Optional: detect accidental storage replacement after initialization.
+# Optional: detect accidental storage replacement, including an auto-created store.
 # expected_authority_id = "<authorityId from sync capabilities>"

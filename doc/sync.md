@@ -8,12 +8,18 @@
 
 ```bash
 cargo build --release
-# 首次初始化；普通服务启动从不自动初始化。
-target/release/fs-agent sync init /path/to/config.toml
 target/release/fs-agent /path/to/config.toml
 ```
 
-同步与执行可以同时启用，但同步库不得与 export、只读运行库及其实际目录别名重叠。启动会拒绝重叠目录。数据库和对象库必须位于支持 SQLite WAL、文件锁、硬链接和 fsync 的本地文件系统。
+首次启动时，若 `sync.root` 不存在、为空，或只剩上次启动留下的 `sync.lock`，服务会自动创建并初始化存储，并记录 `sync.initialized` 事件。`sync init` 保留给显式初始化和无服务启动的部署流程，两者使用同一套拒绝规则：
+
+```bash
+target/release/fs-agent sync init /path/to/config.toml
+```
+
+自动初始化只覆盖尚无数据库的全新目录。目录内已有其他文件、`storage.json`、对象或 WAL 时，启动不会新建数据库或新身份，而是拒绝：`SYNC_ROOT_NOT_EMPTY`、`SYNC_INITIALIZATION_UNSAFE` 或 `SYNC_INITIALIZATION_INCOMPLETE`。只读 `sync verify` 对未初始化目录返回 `SYNC_NOT_INITIALIZED`，不写入任何内容。误挂载或误指向新目录会得到新的 authorityId，可用 `expected_authority_id` 检出。
+
+同步与执行可以同时启用，但同步库不得与 export、只读运行库及其实际目录别名重叠。启动会拒绝重叠目录，判定在目录创建前完成。数据库和对象库必须位于支持 SQLite WAL、文件锁、硬链接和 fsync 的本地文件系统。
 
 两个 example 是同一个 fs-agent 二进制的部署示例，不是两个不同服务。普通文件、执行和同步可以在一个进程、一个端口上同时提供：在普通配置中增加以下段即可，现有 exports 保留。纯同步示例则明确关闭 execution 并省略 exports。若选择启动两个进程，必须使用不同 listen 地址或端口；同一 sync.root 只能由一个实例独占打开。
 
@@ -61,7 +67,7 @@ target/release/fs-agent sync repair /path/to/config.toml PROJECT SHA256 /path/to
 
 恢复保持 authorityId，生成新的 historyEpoch 和 cursor 密钥。旧操作记录留作诊断，新代次不继承旧副本序号。客户端保留本地修改，重新注册副本、读取成员和 head、对账并激活，从 opSeq=1 开始发布。当前管理员命令提供同服务灾备恢复；另一个 authority 的克隆需后续增加明确入口。
 
-初始化中断产生 `init.pending`，可重复执行同一 init 命令。恢复中断产生 `restore.pending`，普通启动拒绝打开它；可用原备份重复执行 restore。修复与 GC 的持久意图由正常启动恢复。已有对象、标记或 WAL 而数据库缺失时，服务拒绝启动。
+初始化中断产生 `init.pending`，可重复执行同一 init 命令。恢复中断产生 `restore.pending`，普通启动拒绝打开它；可用原备份重复执行 restore。修复与 GC 的持久意图由正常启动恢复。已有对象、标记或 WAL 而数据库缺失时，服务拒绝启动：自动初始化只在真正没有数据库的全新目录上运行，不会把残缺存储替换成新身份。
 
 init 续作也遵守上述拒绝规则：已有 storage.json、对象或 WAL 时，init.pending 不能授权创建空数据库或新身份。数据库身份已写入但 marker 尚未完成时，可以沿用原身份完成首次初始化。
 

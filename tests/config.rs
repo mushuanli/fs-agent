@@ -239,3 +239,60 @@ fn process_epoch_is_independent_of_the_cursor_key() {
     assert_ne!(first.execution.epoch(), key_hex);
     assert_ne!(first.execution.epoch(), second.execution.epoch());
 }
+
+/// A first start on a missing or empty sync root creates the store instead of
+/// failing the launch, without touching the export layout.
+#[test]
+fn startup_initializes_a_missing_sync_root() {
+    let _guard = lock();
+    let root = tempfile::tempdir().unwrap();
+    let store = root.path().join("store");
+    let state = load(&format!(
+        "execution = false\nusername = \"li\"\npassword = \"12345678\"\n\
+         [sync]\nenabled = true\nroot = {store:?}\nmetadata_reserve_bytes = 0\n"
+    ))
+    .unwrap();
+    let sync = state.sync.as_ref().expect("sync must be served");
+    assert!(store.join("storage.json").exists());
+    assert!(store.join("metadata.db").exists());
+    assert!(!store.join("init.pending").exists());
+    assert_eq!(
+        sync.capabilities()["authorityId"].as_str().unwrap().len(),
+        64
+    );
+}
+
+#[test]
+fn startup_initializes_a_sync_root_holding_only_a_stale_lock_file() {
+    let _guard = lock();
+    let root = tempfile::tempdir().unwrap();
+    let store = root.path().join("store");
+    std::fs::create_dir(&store).unwrap();
+    std::fs::write(store.join("sync.lock"), b"").unwrap();
+    load(&format!(
+        "execution = false\nusername = \"li\"\npassword = \"12345678\"\n\
+         [sync]\nenabled = true\nroot = {store:?}\nmetadata_reserve_bytes = 0\n"
+    ))
+    .unwrap();
+    assert!(store.join("metadata.db").exists());
+}
+
+/// The isolation check runs before the root exists, so it must resolve the path
+/// that is about to be created rather than skipping it.
+#[test]
+fn startup_rejects_a_sync_root_that_would_be_created_inside_an_export() {
+    let _guard = lock();
+    let root = tempfile::tempdir().unwrap();
+    let export = root.path().join("x1");
+    std::fs::create_dir(&export).unwrap();
+    let nested = export.join("store");
+    let error = load(&format!(
+        "execution = false\nusername = \"li\"\npassword = \"12345678\"\n\
+         [[exports]]\npath = {export:?}\n\
+         [sync]\nenabled = true\nroot = {nested:?}\n"
+    ))
+    .err()
+    .expect("an overlapping root must be rejected");
+    assert!(error.contains("SYNC_EXPORT_OVERLAP"), "{error}");
+    assert!(!nested.exists());
+}

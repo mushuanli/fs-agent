@@ -30,17 +30,33 @@ impl SyncService {
     pub fn validate_isolation(config: &Config, app: &crate::config::Config) -> Result<()> {
         super::store::boundary::validate(config, app)
     }
+    /// Refuse to initialize into a directory that holds anything other than the
+    /// empty `sync.lock` left behind by an earlier open attempt.
+    fn ensure_initializable(config: &Config) -> Result<()> {
+        if !config.root.exists() || config.root.join("init.pending").exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(&config.root)? {
+            if entry?.file_name() != "sync.lock" {
+                return Err(Error::new("SYNC_ROOT_NOT_EMPTY", 409));
+            }
+        }
+        Ok(())
+    }
+    /// True when this root has never held a store, so it is safe to initialize.
+    ///
+    /// Only a missing database counts. A root that still has `storage.json`, a
+    /// WAL or objects is a damaged store, not a new one: it must be repaired or
+    /// restored explicitly instead of being replaced by a fresh identity.
+    fn needs_initialization(config: &Config) -> bool {
+        !config.root.join("metadata.db").exists() && !config.root.join("metadata.db-wal").exists()
+    }
     pub fn init(config: &Config) -> Result<()> {
         policy::validate(config)?;
-        let pending = config.root.join("init.pending");
-        if config.root.exists()
-            && std::fs::read_dir(&config.root)?.next().is_some()
-            && !pending.exists()
-        {
-            return Err(Error::new("SYNC_ROOT_NOT_EMPTY", 409));
-        }
+        Self::ensure_initializable(config)?;
         blobs::private_dir(&config.root)?;
         let _lock = blobs::lock(&config.root)?;
+        let pending = config.root.join("init.pending");
         let marker = Self::initialization_marker(config)?;
         blobs::atomic(&pending, b"initializing")?;
         let db = m::initialize(&config.root.join("metadata.db"))?;
@@ -111,6 +127,7 @@ impl SyncService {
             &serde_json::to_vec(identity)?,
         )
     }
+    /// Open the store, initializing a missing or empty root on first start.
     pub fn open(config: &Config) -> Result<Arc<Self>> {
         Self::open_mode(config, false, true)
     }
@@ -126,6 +143,20 @@ impl SyncService {
             || config.root.join("init.pending").exists()
         {
             return Err(Error::new("SYNC_INITIALIZATION_INCOMPLETE", 503));
+        }
+        if Self::needs_initialization(config) {
+            // A first launch on a missing or empty root creates the store
+            // instead of failing the start. Damage that is not an absent store
+            // still fails closed in init, and a read-only open never writes.
+            if !recover || restoring {
+                return Err(Error::new("SYNC_NOT_INITIALIZED", 503));
+            }
+            Self::init(config)?;
+            crate::core::events::emit(
+                crate::core::events::Level::Info,
+                "sync.initialized",
+                json!({"root": config.root.display().to_string()}),
+            );
         }
         let lock = blobs::lock(&config.root)?;
         let marker: Identity =

@@ -331,6 +331,88 @@ fn interrupted_first_initialization_preserves_database_identity() {
 }
 
 #[test]
+fn first_open_initializes_a_missing_root() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("store");
+    let s = SyncService::open(&config(&root)).unwrap();
+    assert!(root.join("storage.json").exists());
+    assert!(root.join("metadata.db").exists());
+    assert!(!root.join("init.pending").exists());
+    project(&s);
+    assert_eq!(
+        s.projects("all").unwrap()["projects"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn first_open_initializes_a_root_holding_only_the_lock_of_a_failed_start() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("sync.lock"), b"").unwrap();
+    let s = SyncService::open(&config(root.path())).unwrap();
+    assert!(root.path().join("storage.json").exists());
+    assert!(root.path().join("metadata.db").exists());
+    assert!(!root.path().join("init.pending").exists());
+    assert!(s.healthy());
+}
+
+#[test]
+fn initialization_accepts_the_lock_file_left_by_a_failed_start() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("sync.lock"), b"").unwrap();
+    SyncService::init(&config(root.path())).unwrap();
+    assert!(root.path().join("storage.json").exists());
+}
+
+#[test]
+fn first_open_and_init_still_refuse_a_root_with_unrelated_content() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("notes.txt"), b"keep").unwrap();
+    for error in [
+        SyncService::init(&config(root.path())).unwrap_err(),
+        SyncService::open(&config(root.path())).err().unwrap(),
+    ] {
+        assert_eq!(error.code, "SYNC_ROOT_NOT_EMPTY");
+    }
+    assert!(!root.path().join("metadata.db").exists());
+    assert!(!root.path().join("storage.json").exists());
+}
+
+#[test]
+fn open_never_replaces_a_store_that_lost_only_its_database() {
+    let root = tempfile::tempdir().unwrap();
+    let s = service(root.path());
+    let marker = std::fs::read(root.path().join("storage.json")).unwrap();
+    drop(s);
+    std::fs::remove_file(root.path().join("metadata.db")).unwrap();
+    let _ = std::fs::remove_file(root.path().join("metadata.db-wal"));
+    assert_eq!(
+        SyncService::open(&config(root.path())).err().unwrap().code,
+        "SYNC_ROOT_NOT_EMPTY"
+    );
+    assert!(!root.path().join("metadata.db").exists());
+    assert!(!root.path().join("init.pending").exists());
+    assert_eq!(
+        std::fs::read(root.path().join("storage.json")).unwrap(),
+        marker
+    );
+}
+
+#[test]
+fn read_only_verify_never_initializes_a_root() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("store");
+    assert_eq!(
+        SyncService::open_verify(&config(&root)).err().unwrap().code,
+        "SYNC_NOT_INITIALIZED"
+    );
+    assert!(!root.exists());
+}
+
+#[test]
 fn waiting_writer_rechecks_shutdown_and_uncertain_storage_under_lock() {
     for shutdown in [true, false] {
         let root = tempfile::tempdir().unwrap();

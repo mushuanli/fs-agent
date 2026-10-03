@@ -85,7 +85,7 @@ MindOS 项目右键菜单选择“启用远程命令”后，File Tools 和 Bash
 
 ## 项目多端同步
 
-同步存储、配置、管理员备份恢复与 HTTP 协议见 [单节点同步存储](doc/sync.md)。纯同步实例可使用 [config.sync.example.toml](config.sync.example.toml)，无需配置 export；首次启动前显式运行 `fs-agent sync init CONFIG`。同步库与 export 使用独立目录，不自动发布工作目录的变化。
+同步存储、配置、管理员备份恢复与 HTTP 协议见 [单节点同步存储](doc/sync.md)。纯同步实例可使用 [config.sync.example.toml](config.sync.example.toml)，无需配置 export；sync.root 不存在或为空时首次启动自动初始化，也可先用 `fs-agent sync init CONFIG` 显式初始化。同步库与 export 使用独立目录，不自动发布工作目录的变化。
 
 ## 代码结构
 
