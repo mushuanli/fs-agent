@@ -21,6 +21,7 @@ pub async fn capabilities(
         "files": {
             "read": !client.exports().is_empty(),
             "write": client.can_write(),
+            "seq": { "version": 1, "sqlite": true, "transactionScope": "file" },
         },
         "sync": { "push": state.sync.as_ref().is_some_and(|s|s.healthy()),
             "protocolVersion": if state.sync.is_some() {Some(1)} else {None},

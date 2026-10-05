@@ -11,4 +11,5 @@ pub mod exports;
 pub mod mutations;
 pub mod operations;
 pub mod processes;
+pub mod seq;
 pub mod stat;

@@ -15,6 +15,7 @@ pub mod path;
 pub mod recovery;
 pub mod registry;
 pub mod revision;
+pub mod seq;
 pub mod upload;
 
 pub use export::Export;

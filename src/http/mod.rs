@@ -71,6 +71,11 @@ pub fn router(state: Arc<State>, origins: &[String]) -> Result<Router, String> {
             get(handlers::content::content).put(handlers::mutations::replace),
         )
         .route("/v1/fs/:alias/mutate", post(handlers::mutations::mutate))
+        .route("/v1/fs/:alias/seq/snapshot", post(handlers::seq::snapshot))
+        .route(
+            "/v1/fs/:alias/seq/transaction",
+            post(handlers::seq::transaction),
+        )
         .route(
             "/v1/fs/:alias/operations/:id",
             get(handlers::operations::status),

@@ -8,3 +8,4 @@ mod capabilities;
 mod content;
 mod listing;
 mod mutations;
+mod seq;
