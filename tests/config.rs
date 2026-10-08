@@ -1,4 +1,4 @@
-use fs_agent::{app::State, config::Config};
+use pi_agent::{app::State, config::Config};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 // Credential resolution reads the process environment, so the tests serialize.
@@ -49,7 +49,7 @@ fn read_write_access_implies_exclusive_writes() {
     .unwrap();
     assert!(state.auth.clients()[0].may_write("x1"));
     assert!(state.exports.get("x1").unwrap().writable());
-    assert!(fs_agent::fs::Export::exclusive(std::path::Path::new(&path)).is_err());
+    assert!(pi_agent::fs::Export::exclusive(std::path::Path::new(&path)).is_err());
 }
 
 #[test]
@@ -72,6 +72,30 @@ fn token_clients_use_bearer_without_a_username() {
     ))
     .unwrap();
     assert!(state.auth.clients()[0].username().is_none());
+}
+
+#[test]
+fn api_key_configuration_authenticates_bearer_without_username() {
+    let _guard = lock();
+    let (_root, path) = fixture();
+    let state = load(&format!(
+        "api_key = 'api-key-at-least-24-bytes-long'\n[[exports]]\npath = '{path}'\n"
+    ))
+    .unwrap();
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "authorization",
+        "Bearer api-key-at-least-24-bytes-long".parse().unwrap(),
+    );
+    assert_eq!(state.auth.identify(&headers).unwrap(), 0);
+    assert!(state.auth.client(0).username().is_none());
+    headers.insert("authorization", "Bearer incorrect-api-key".parse().unwrap());
+    assert!(state.auth.identify(&headers).is_err());
+}
+
+#[test]
+fn api_key_and_legacy_token_cannot_both_be_configured() {
+    assert!(toml::from_str::<Config>("listen='127.0.0.1:0'\napi_key='one'\ntoken='two'").is_err());
 }
 
 #[test]
@@ -210,7 +234,7 @@ fn execution_defaults_on_with_an_ephemeral_identity_and_can_be_disabled() {
         format!("username = \"li\"\npassword = \"12345678\"\n[[exports]]\npath = {path:?}\n");
     let first = load(&base).unwrap();
     let second = load(&base).unwrap();
-    assert!(first.auth.server_id().unwrap().starts_with("fs-agent-"));
+    assert!(first.auth.server_id().unwrap().starts_with("pi-agent-"));
     assert_ne!(first.auth.server_id(), second.auth.server_id());
     assert_eq!(
         load(&format!("execution = false\n{base}"))

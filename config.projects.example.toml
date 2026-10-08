@@ -1,0 +1,30 @@
+listen = "127.0.0.1:8787"
+server_id = "office-node"
+execution = true
+api_key_env = "PI_AGENT_API_KEY"
+
+[projects]
+root = "/var/lib/pi-agent/projects"
+network = false
+
+[[exports]]
+alias = "home"
+path = "/srv/work"
+access = "rw"
+
+[[exports]]
+alias = "reference"
+path = "/srv/reference"
+access = "ro"
+
+[[harnesses]]
+id = "codex"
+kind = "codex"
+command = "/opt/codex/codex"
+home = "/var/lib/pi-agent/codex"
+projects = true
+
+# Enable to materialize uploaded files datasets into writable project directories.
+[sync]
+enabled = true
+root = "/var/lib/pi-agent/sync"

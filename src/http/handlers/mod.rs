@@ -8,6 +8,7 @@ pub mod capabilities;
 pub mod content;
 pub mod entries;
 pub mod exports;
+pub mod harness;
 pub mod mutations;
 pub mod operations;
 pub mod processes;

@@ -1,28 +1,28 @@
 #[cfg(feature = "sync-fault-injection")]
 mod cases {
     use super::super::support::*;
-    use fs_agent::sync::SyncService;
+    use pi_agent::sync::SyncService;
     use serde_json::json;
 
     #[test]
     fn child() {
-        let Ok(root) = std::env::var("FS_AGENT_SYNC_CHILD_ROOT") else {
+        let Ok(root) = std::env::var("PI_AGENT_SYNC_CHILD_ROOT") else {
             return;
         };
-        if std::env::var("FS_AGENT_SYNC_CRASH_AT").ok().as_deref() == Some("after-restore-copy") {
-            fs_agent::sync::admin(&[
+        if std::env::var("PI_AGENT_SYNC_CRASH_AT").ok().as_deref() == Some("after-restore-copy") {
+            pi_agent::sync::admin(&[
                 "restore".into(),
-                std::env::var("FS_AGENT_SYNC_CHILD_CONFIG").unwrap(),
-                std::env::var("FS_AGENT_SYNC_CHILD_BACKUP").unwrap(),
+                std::env::var("PI_AGENT_SYNC_CHILD_CONFIG").unwrap(),
+                std::env::var("PI_AGENT_SYNC_CHILD_BACKUP").unwrap(),
             ])
             .unwrap();
             return;
         }
         let s = SyncService::open(&config(std::path::Path::new(&root))).unwrap();
-        if std::env::var("FS_AGENT_SYNC_IO_FAIL_AT").is_ok() {
-            let next = std::env::var("FS_AGENT_SYNC_CHILD_MANIFEST").unwrap();
+        if std::env::var("PI_AGENT_SYNC_IO_FAIL_AT").is_ok() {
+            let next = std::env::var("PI_AGENT_SYNC_CHILD_MANIFEST").unwrap();
             let head = s.head("p", "files").unwrap();
-            let point = std::env::var("FS_AGENT_SYNC_IO_FAIL_AT").unwrap();
+            let point = std::env::var("PI_AGENT_SYNC_IO_FAIL_AT").unwrap();
             let generation = if point == "before-savepoint-rollback" {
                 json!("999")
             } else {
@@ -39,20 +39,20 @@ mod cases {
             }
             return;
         }
-        let point = std::env::var("FS_AGENT_SYNC_CRASH_AT").unwrap();
+        let point = std::env::var("PI_AGENT_SYNC_CRASH_AT").unwrap();
         if point == "after-gc-mark" {
             s.gc().unwrap();
         } else if point == "after-repair-intent" {
             s.repair(
                 "p",
                 &hash(b"first"),
-                std::path::Path::new(&std::env::var("FS_AGENT_SYNC_CHILD_SOURCE").unwrap()),
+                std::path::Path::new(&std::env::var("PI_AGENT_SYNC_CHILD_SOURCE").unwrap()),
             )
             .unwrap();
         } else if point.contains("object") {
             install(&s, "p", b"new-object");
         } else {
-            let next = std::env::var("FS_AGENT_SYNC_CHILD_MANIFEST").unwrap();
+            let next = std::env::var("PI_AGENT_SYNC_CHILD_MANIFEST").unwrap();
             let current = s.head("p", "files").unwrap();
             let head =
                 json!({"generation":current["generation"],"manifestHash":current["manifestHash"]});
@@ -81,9 +81,9 @@ mod cases {
             drop(s);
             let exit = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "crash::cases::child"])
-                .env("FS_AGENT_SYNC_CHILD_ROOT", root.path())
-                .env("FS_AGENT_SYNC_IO_FAIL_AT", point)
-                .env("FS_AGENT_SYNC_CHILD_MANIFEST", next)
+                .env("PI_AGENT_SYNC_CHILD_ROOT", root.path())
+                .env("PI_AGENT_SYNC_IO_FAIL_AT", point)
+                .env("PI_AGENT_SYNC_CHILD_MANIFEST", next)
                 .stdout(std::process::Stdio::null())
                 .status()
                 .unwrap();
@@ -96,9 +96,9 @@ mod cases {
     fn crash(root: &std::path::Path, point: &str, manifest: &str) {
         let exit = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "crash::cases::child"])
-            .env("FS_AGENT_SYNC_CHILD_ROOT", root)
-            .env("FS_AGENT_SYNC_CRASH_AT", point)
-            .env("FS_AGENT_SYNC_CHILD_MANIFEST", manifest)
+            .env("PI_AGENT_SYNC_CHILD_ROOT", root)
+            .env("PI_AGENT_SYNC_CRASH_AT", point)
+            .env("PI_AGENT_SYNC_CHILD_MANIFEST", manifest)
             .stdout(std::process::Stdio::null())
             .status()
             .unwrap();
@@ -181,9 +181,9 @@ mod cases {
         drop(s);
         let exit = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "crash::cases::child"])
-            .env("FS_AGENT_SYNC_CHILD_ROOT", root.path())
-            .env("FS_AGENT_SYNC_IO_FAIL_AT", "publish-commit-unknown")
-            .env("FS_AGENT_SYNC_CHILD_MANIFEST", next)
+            .env("PI_AGENT_SYNC_CHILD_ROOT", root.path())
+            .env("PI_AGENT_SYNC_IO_FAIL_AT", "publish-commit-unknown")
+            .env("PI_AGENT_SYNC_CHILD_MANIFEST", next)
             .stdout(std::process::Stdio::null())
             .status()
             .unwrap();
@@ -219,9 +219,9 @@ mod cases {
         std::fs::write(&source, b"first").unwrap();
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "crash::cases::child"])
-            .env("FS_AGENT_SYNC_CHILD_ROOT", &root)
-            .env("FS_AGENT_SYNC_CRASH_AT", "after-repair-intent")
-            .env("FS_AGENT_SYNC_CHILD_SOURCE", source)
+            .env("PI_AGENT_SYNC_CHILD_ROOT", &root)
+            .env("PI_AGENT_SYNC_CRASH_AT", "after-repair-intent")
+            .env("PI_AGENT_SYNC_CHILD_SOURCE", source)
             .stdout(std::process::Stdio::null())
             .status()
             .unwrap();
@@ -246,16 +246,16 @@ mod cases {
         std::fs::write(&file,format!("listen='127.0.0.1:0'\nexecution=false\ntoken='sync-test-secret-at-least-24-bytes'\n[sync]\nenabled=true\nroot='{}'\nmetadata_reserve_bytes=0",target.display())).unwrap();
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "crash::cases::child"])
-            .env("FS_AGENT_SYNC_CHILD_ROOT", &target)
-            .env("FS_AGENT_SYNC_CRASH_AT", "after-restore-copy")
-            .env("FS_AGENT_SYNC_CHILD_CONFIG", &file)
-            .env("FS_AGENT_SYNC_CHILD_BACKUP", &backup)
+            .env("PI_AGENT_SYNC_CHILD_ROOT", &target)
+            .env("PI_AGENT_SYNC_CRASH_AT", "after-restore-copy")
+            .env("PI_AGENT_SYNC_CHILD_CONFIG", &file)
+            .env("PI_AGENT_SYNC_CHILD_BACKUP", &backup)
             .stdout(std::process::Stdio::null())
             .status()
             .unwrap();
         assert_eq!(result.code(), Some(86));
         assert!(SyncService::open(&config(&target)).is_err());
-        fs_agent::sync::admin(&[
+        pi_agent::sync::admin(&[
             "restore".into(),
             file.to_string_lossy().into_owned(),
             backup.to_string_lossy().into_owned(),

@@ -69,6 +69,7 @@ pub async fn replace(
 ) -> Result<(StatusCode, Json<Value>), Error> {
     let deadline = access::deadline(&headers)?;
     path::validate(&query.path)?;
+    let _project_guard = access::project_path(&state, &headers, &alias, &query.path, true, false)?;
     let condition = WriteCondition::from_headers(&headers)?;
     let gate = state.files.shared()?;
     let (identity, export) = access::writable_export(&state, &headers, &alias)?;
@@ -192,6 +193,11 @@ pub async fn mutate(
         return Err(Error::unsupported());
     }
     let audit_paths = json!({"action": command.action, "path": command.path, "to": command.to});
+    let _project_guard =
+        access::project_path(&state, &headers, &alias, &command.path, true, false)?;
+    if let Some(to) = &command.to {
+        let _project_guard = access::project_path(&state, &headers, &alias, to, true, false)?;
+    }
     let change = Change::parse(&command.action, command.path, command.to)?;
     let gate = state.files.shared()?;
     let (identity, export) = access::writable_export(&state, &headers, &alias)?;

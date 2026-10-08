@@ -1,0 +1,23 @@
+# Harness-only gateway. Replace paths with existing absolute directories.
+listen = "127.0.0.1:8787"
+server_id = "my-agent-node"
+execution = false
+allowed_origins = ["http://localhost:3000", "http://localhost:1420"]
+api_key_env = "PI_AGENT_API_KEY"
+
+[[harnesses]]
+id = "codex-main"
+kind = "codex"
+command = "codex"
+home = "/home/your-user/.codex"
+
+[[harnesses.workspaces]]
+id = "project"
+path = "/srv/projects/demo"
+
+# Optional read-only file browsing. Writable exclusive exports cannot overlap
+# a harness workspace because Codex writes outside the file revision gateway.
+# [[exports]]
+# alias = "demo"
+# path = "/srv/projects/demo"
+# access = "ro"

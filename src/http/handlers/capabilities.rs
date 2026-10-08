@@ -28,6 +28,7 @@ pub async fn capabilities(
             "discovery": if state.sync.is_some() {Some("/v1/sync/capabilities")} else {None} },
         "process": { "exec": execution },
         "terminal": { "pty": false },
+        "harness": { "enabled": state.harness.enabled(), "protocolVersion": "2026-07-28", "endpoint": "/mcp" },
         "executionModel": if execution { "sandbox" } else { "none" },
         "workspaceConsistency": if execution { "isolated" } else { "none" },
         "readOnlyEnforcement": if execution { "kernel-enforced" } else { "none" },

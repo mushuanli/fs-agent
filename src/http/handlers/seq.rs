@@ -21,6 +21,7 @@ pub async fn snapshot(
     Json(query): Json<Query>,
 ) -> Result<Json<seq::Snapshot>, Error> {
     let (_, export) = access::export(&state, &headers, &alias)?;
+    let _project_guard = access::project_path(&state, &headers, &alias, &query.path, false, false)?;
     let deadline = access::deadline(&headers)?;
     state
         .workers
@@ -39,6 +40,7 @@ pub async fn transaction(
     Json(input): Json<seq::Update>,
 ) -> Result<(StatusCode, Json<Value>), Error> {
     let (identity, export) = access::writable_export(&state, &headers, &alias)?;
+    let _project_guard = access::project_path(&state, &headers, &alias, &input.path, true, false)?;
     let deadline = access::deadline(&headers)?;
     let gate = state.files.shared()?;
     let operation = state

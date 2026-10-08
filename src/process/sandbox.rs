@@ -28,10 +28,23 @@ pub struct Prepared {
 /// `lock` is retained by bubblewrap's monitor through `--sync-fd`, which keeps
 /// the exclusive export lock alive across a daemon crash.
 pub fn assemble(plan: &Plan, lock: File) -> Result<Prepared, Error> {
+    let mut prepared = mount_plan(plan, lock)?;
+    prepared
+        .command
+        .args(["--chdir", &plan.cwd, "--", &plan.command])
+        .args(&plan.args);
+    Ok(prepared)
+}
+pub fn mount_plan(plan: &Plan, lock: File) -> Result<Prepared, Error> {
     let mut directories = Vec::with_capacity(plan.mounts.len() + 1);
     let mut command = base();
     for mount in &plan.mounts {
         let directory = mount.export.open_dir(&mount.path)?;
+        if mount.identity.as_ref().is_some_and(|expected| {
+            crate::projects::service::identity_of(&directory).as_ref() != Ok(expected)
+        }) {
+            return Err(Error::conflict("PROJECT_DIRECTORY_CHANGED"));
+        }
         command
             .arg(if mount.writable {
                 "--bind-fd"
@@ -44,9 +57,6 @@ pub fn assemble(plan: &Plan, lock: File) -> Result<Prepared, Error> {
     }
     command.arg("--sync-fd").arg(lock.as_raw_fd().to_string());
     directories.push(lock);
-    command
-        .args(["--chdir", &plan.cwd, "--", &plan.command])
-        .args(&plan.args);
     inherit_fds(&mut command, &directories);
     Ok(Prepared {
         command,
@@ -78,7 +88,7 @@ pub async fn probe() -> Result<(), String> {
 }
 
 /// The isolated runtime every command starts from.
-fn base() -> tokio::process::Command {
+pub fn base() -> tokio::process::Command {
     let mut command = tokio::process::Command::new("/usr/bin/bwrap");
     command.args([
         "--unshare-all",
@@ -106,7 +116,7 @@ fn base() -> tokio::process::Command {
 }
 
 /// Make the capability descriptors inheritable by the launcher only.
-fn inherit_fds(command: &mut tokio::process::Command, directories: &[File]) {
+pub fn inherit_fds(command: &mut tokio::process::Command, directories: &[File]) {
     let numbers: Vec<i32> = directories.iter().map(AsRawFd::as_raw_fd).collect();
     // SAFETY: the closure runs after `fork` and calls only async-signal-safe
     // `fcntl` operations on descriptors this process still owns.

@@ -4,20 +4,17 @@
 # execution = false  # explicitly select file-only service
 listen = "127.0.0.1:8787"
 # trace/debug/info/warn/error/off; successful reads stay silent at every level.
-log_level = "debug"
+log_level = "info"
 # Browser origins allowed to read responses: Web dev (3000) and Tauri dev (1420).
 # "tauri://localhost" / "http://tauri.localhost" cover packaged Tauri builds;
 # ["*"] allows every origin (trusted, local-only setups); [] blocks all browsers.
 allowed_origins = ["http://localhost:3000", "http://localhost:1420"]
 
-# Single user. Credentials are either inline (`password` / `token`) or read from
-# an environment variable (`password_env` / `token_env`); set exactly one of the
-# four fields. Username: `username`, else FS_SERVER_USER.
-username = "workbench"
-password_env = "FS_SERVER_PASSWORD"
-# password = "replace-with-at-least-8-bytes"
-# Legacy Bearer client: token_env = "FS_SERVER_TOKEN" (at least 24 bytes).
-# A token client must not also set `username`; that combination is rejected.
+# API Key uses Bearer authentication and needs no username; choose one source.
+api_key_env = "PI_AGENT_API_KEY"  # at least 24 bytes
+# api_key = "replace-with-at-least-24-bytes"
+# Legacy password/password_env and token/token_env remain supported.
+# Do not combine an API Key with username or password authentication.
 
 # Every [[exports]] section exposes one host directory. The client path prefix
 # (alias) defaults to the directory name; set `alias` to override it.
@@ -32,7 +29,10 @@ access = "ro"        # default; "rw" takes an exclusive lock for writes
 
 # Optional sync storage in the same process and on the same listening port.
 # Keep this private root separate from all exports and sandbox runtime mounts.
-# Initialize it once: fs-agent sync init /path/to/config.toml
+# Initialize it once: pi-agent sync init /path/to/config.toml
 # [sync]
 # enabled = true
-# root = "/srv/fs-agent-sync"
+# root = "/srv/pi-agent-sync"
+
+# External harness control can be enabled separately from shell execution.
+# See config.harness.example.toml for an explicit Codex home/workspace profile.

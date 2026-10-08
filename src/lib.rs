@@ -1,4 +1,4 @@
-//! `fs-agent` — an authenticated HTTP file service with optional remote command
+//! `pi-agent` — an authenticated HTTP file service with optional remote command
 //! execution.
 //!
 //! # Layout
@@ -27,9 +27,11 @@ pub mod auth;
 pub mod config;
 pub mod core;
 pub mod fs;
+pub mod harness;
 pub mod http;
 pub mod operations;
 pub mod process;
+pub mod projects;
 pub mod sync;
 pub mod workspace;
 

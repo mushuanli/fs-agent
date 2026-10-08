@@ -22,11 +22,16 @@ pub struct Config {
     pub username: Option<String>,
     pub password: Option<String>,
     pub password_env: Option<String>,
+    #[serde(alias = "api_key")]
     pub token: Option<String>,
+    #[serde(alias = "api_key_env")]
     pub token_env: Option<String>,
     #[serde(default)]
     pub exports: Vec<ExportConfig>,
     pub sync: Option<crate::sync::Config>,
+    pub projects: Option<crate::projects::Config>,
+    #[serde(default)]
+    pub harnesses: Vec<crate::harness::config::ProfileConfig>,
 }
 
 fn execution_enabled() -> bool {

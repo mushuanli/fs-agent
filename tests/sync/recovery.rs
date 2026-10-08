@@ -1,5 +1,5 @@
 use super::support::*;
-use fs_agent::sync::SyncService;
+use pi_agent::sync::SyncService;
 use serde_json::json;
 
 #[test]
@@ -91,7 +91,7 @@ fn backup_empty_restore_epoch_rejoin_and_damage_repair() {
     let restored_c = config(&new_root);
     let config_path = parent.path().join("restore.toml");
     std::fs::write(&config_path,format!("listen='127.0.0.1:0'\nexecution=false\ntoken='sync-test-secret-at-least-24-bytes'\n[sync]\nenabled=true\nroot='{}'\nmetadata_reserve_bytes=0",new_root.display())).unwrap();
-    fs_agent::sync::admin(&[
+    pi_agent::sync::admin(&[
         "restore".into(),
         config_path.to_string_lossy().into_owned(),
         backup.to_string_lossy().into_owned(),
@@ -269,7 +269,7 @@ fn pins_protect_expired_versions_and_gc_reclaims_after_the_window() {
 
 #[tokio::test]
 async fn sandbox_cannot_access_sync_storage_via_paths_or_descriptors() {
-    if std::env::var("FS_AGENT_PROCESS_TEST").as_deref() != Ok("1") {
+    if std::env::var("PI_AGENT_PROCESS_TEST").as_deref() != Ok("1") {
         return;
     }
     use axum::{body::Body, http::Request};
@@ -281,10 +281,10 @@ async fn sandbox_cannot_access_sync_storage_via_paths_or_descriptors() {
     std::fs::create_dir(&work).unwrap();
     let c = config(&root);
     SyncService::init(&c).unwrap();
-    let app_config:fs_agent::config::Config=toml::from_str(&format!("listen='127.0.0.1:0'\nexecution=true\nserver_id='test-node'\ntoken='sync-test-secret-at-least-24-bytes'\n[sync]\nenabled=true\nroot='{}'\nmetadata_reserve_bytes=0\n[[exports]]\npath='{}'\nalias='work'\naccess='rw'",root.display(),work.display())).unwrap();
-    let state = fs_agent::app::State::from_config(&app_config).unwrap();
-    fs_agent::process::enable(&state).await.unwrap();
-    let app = fs_agent::router(state.clone(), &[]).unwrap();
+    let app_config:pi_agent::config::Config=toml::from_str(&format!("listen='127.0.0.1:0'\nexecution=true\nserver_id='test-node'\ntoken='sync-test-secret-at-least-24-bytes'\n[sync]\nenabled=true\nroot='{}'\nmetadata_reserve_bytes=0\n[[exports]]\npath='{}'\nalias='work'\naccess='rw'",root.display(),work.display())).unwrap();
+    let state = pi_agent::app::State::from_config(&app_config).unwrap();
+    pi_agent::process::enable(&state).await.unwrap();
+    let app = pi_agent::router(state.clone(), &[]).unwrap();
     let script=format!("set -eu; test ! -e '{}'; test ! -e /workspace/../sync; for fd in /proc/self/fd/*; do target=$(readlink \"$fd\" || true); case \"$target\" in *metadata.db*|*sync.lock*) exit 8;; esac; done; printf isolated",root.display());
     let body = json!({"serverId":"test-node","epoch":state.execution.epoch(),"requestId":"sync-isolation","command":"/bin/bash","args":["-c",script],"cwd":"/workspace","timeoutMs":5000,"mounts":[{"alias":"work","path":"","at":"/workspace","access":"rw"}]});
     let req = Request::builder()
@@ -399,8 +399,8 @@ fn export_overlap_identity_change_and_oversized_upload_are_rejected() {
     let root = parent.path().join("sync");
     let c = config(&root);
     SyncService::init(&c).unwrap();
-    let config:fs_agent::config::Config=toml::from_str(&format!("listen='127.0.0.1:0'\nexecution=false\ntoken='sync-test-secret-at-least-24-bytes'\n[sync]\nenabled=true\nroot='{}'\n[[exports]]\npath='{}'\nalias='all'",root.display(),parent.path().display())).unwrap();
-    assert!(fs_agent::app::State::from_config(&config)
+    let config:pi_agent::config::Config=toml::from_str(&format!("listen='127.0.0.1:0'\nexecution=false\ntoken='sync-test-secret-at-least-24-bytes'\n[sync]\nenabled=true\nroot='{}'\n[[exports]]\npath='{}'\nalias='all'",root.display(),parent.path().display())).unwrap();
+    assert!(pi_agent::app::State::from_config(&config)
         .err()
         .unwrap()
         .contains("SYNC_EXPORT_OVERLAP"));

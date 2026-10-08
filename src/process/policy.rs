@@ -35,6 +35,7 @@ pub struct MountPlan {
     pub path: String,
     pub writable: bool,
     pub export: Arc<Export>,
+    pub identity: Option<String>,
 }
 
 /// An authorized, ready-to-launch command.
@@ -60,22 +61,72 @@ impl Plan {
 /// Validate `request` and resolve it against the caller's authorizations.
 pub fn plan(state: &State, identity: usize, request: &Request) -> Result<Plan, Error> {
     validate_shape(request)?;
-    let mut ordered: Vec<&Mount> = request.mounts.iter().collect();
-    ordered.sort_by_key(|mount| mount.at.len());
-    let mut mounts = Vec::with_capacity(ordered.len());
-    for (index, mount) in ordered.iter().copied().enumerate() {
-        validate_mount(&ordered, index)?;
-        mounts.push(resolve(state, identity, mount)?);
-    }
-    ensure_single_writer(&mounts)?;
+    let mounts = validate_mounts(state, identity, &request.mounts)?;
     let cwd = resolve_cwd(&request.cwd, &mounts)?;
-    Ok(Plan {
+    let mut plan = Plan {
         mounts,
         cwd,
         command: request.command.clone(),
         args: request.args.clone(),
         timeout_ms: request.timeout_ms,
-    })
+    };
+    if let Some(id) = &request.project_id {
+        let project = state
+            .projects
+            .as_ref()
+            .ok_or_else(Error::unsupported)?
+            .get(identity, id)?;
+        crate::projects::service::authorize(state, identity, &project)?;
+        if request.project_revision != Some(project.revision) {
+            return Err(Error::conflict("PROJECT_REVISION_CHANGED"));
+        }
+        let mut granted = crate::projects::service::mounts(&project);
+        if request.read_only {
+            for mount in &mut granted {
+                mount.access = "ro".into();
+            }
+        }
+        if granted != request.mounts {
+            return Err(Error::forbidden("PROJECT_GRANT_CHANGED"));
+        }
+        crate::projects::service::pin(&mut plan, &project)?;
+    }
+    Ok(plan)
+}
+
+pub fn validate_mounts(
+    state: &State,
+    identity: usize,
+    input: &[Mount],
+) -> Result<Vec<MountPlan>, Error> {
+    if input.is_empty() || input.len() > MAX_MOUNTS {
+        return Err(Error::invalid());
+    }
+    let mut ordered: Vec<&Mount> = input.iter().collect();
+    ordered.sort_by_key(|mount| mount.at.len());
+    let mut mounts = Vec::with_capacity(ordered.len());
+    for (index, mount) in ordered.iter().copied().enumerate() {
+        validate_mount(&ordered, index)?;
+        let resolved = resolve(state, identity, mount)?;
+        if let Some(parent) = deepest_prefix(&ordered, &mount.at).filter(|p| p.access == "ro") {
+            let export = state
+                .exports
+                .get(&parent.alias)
+                .ok_or_else(Error::invalid)?;
+            let path = [
+                parent.path.as_str(),
+                mount.at[parent.at.len()..].trim_start_matches('/'),
+            ]
+            .into_iter()
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+            export.open_dir(&path).map_err(|_| Error::unsupported())?;
+        }
+        mounts.push(resolved);
+    }
+    ensure_single_writer(&mounts)?;
+    Ok(mounts)
 }
 
 fn validate_shape(request: &Request) -> Result<(), Error> {
@@ -121,13 +172,7 @@ fn validate_mount(mounts: &[&Mount], index: usize) -> Result<(), Error> {
     {
         return Err(Error::forbidden("EROFS"));
     }
-    // The launcher must create the mount point for `at`; a read-only parent
-    // makes that impossible, so reject it here instead of failing at spawn.
-    if let Some(parent) = deepest_prefix(mounts, &mount.at) {
-        if parent.access == "ro" {
-            return Err(Error::unsupported());
-        }
-    }
+
     Ok(())
 }
 
@@ -152,6 +197,7 @@ fn resolve(state: &State, identity: usize, mount: &Mount) -> Result<MountPlan, E
         path: mount.path.clone(),
         writable,
         export,
+        identity: None,
     })
 }
 

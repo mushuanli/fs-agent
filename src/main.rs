@@ -12,10 +12,12 @@
 //! closes. The order matters — the file gate is drained before the process is
 //! allowed to exit.
 
-use fs_agent::core::events::emit;
-use fs_agent::{app::State, config::launch, process, router};
+use pi_agent::core::events::emit;
+use pi_agent::{app::State, config::launch, process, router};
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
+
+mod startup;
 
 /// Upper bound on how long shutdown waits for in-flight file work.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -28,7 +30,7 @@ async fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             emit(
-                fs_agent::core::events::Level::Error,
+                pi_agent::core::events::Level::Error,
                 "server.start_failed",
                 json!({"error": error.to_string()}),
             );
@@ -40,22 +42,22 @@ async fn main() -> std::process::ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|s| s == "sync") {
-        return fs_agent::sync::admin(&args[1..]).map_err(Into::into);
+        return pi_agent::sync::admin(&args[1..]).map_err(Into::into);
     }
     let path = launch::resolve(args.first().map(String::as_str))?;
     let config = launch::load(&path)?;
-    fs_agent::core::events::set_level(config.log_level);
+    pi_agent::core::events::set_level(config.log_level);
     let state = State::from_config(&config)?;
     // Advertise execution only after the sandbox has been proven to work.
     if config.execution {
         emit(
-            fs_agent::core::events::Level::Debug,
+            pi_agent::core::events::Level::Debug,
             "sandbox.probing",
             json!({}),
         );
         process::enable(&state).await?;
         emit(
-            fs_agent::core::events::Level::Info,
+            pi_agent::core::events::Level::Info,
             "sandbox.ready",
             json!({}),
         );
@@ -66,17 +68,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = router(state.clone(), &config.allowed_origins)?;
     let listener = tokio::net::TcpListener::bind(&config.listen).await?;
     emit(
-        fs_agent::core::events::Level::Info,
+        pi_agent::core::events::Level::Info,
         "server.ready",
         json!({"address": listener.local_addr()?.to_string(), "serverId": state.auth.server_id(),
         "execution": config.execution, "exportCount": config.exports.len()}),
     );
-    if fs_agent::core::events::enabled(fs_agent::core::events::Level::Info) {
+    if pi_agent::core::events::enabled(pi_agent::core::events::Level::Info) {
         eprintln!(
-            "fs-agent listening on {} (config {})",
+            "pi-agent listening on {} (config {})",
             listener.local_addr()?,
             path.display()
         );
+        startup::print(&config, listener.local_addr()?, state.auth.server_id());
+        if state.auth.client(0).username().is_none() {
+            eprintln!("  API Key: {}", state.auth.client(0).secret());
+        }
     }
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown(state))
@@ -88,7 +94,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 async fn shutdown(state: Arc<State>) {
     let _ = tokio::signal::ctrl_c().await;
     emit(
-        fs_agent::core::events::Level::Info,
+        pi_agent::core::events::Level::Info,
         "server.stopping",
         json!({}),
     );
@@ -96,6 +102,7 @@ async fn shutdown(state: Arc<State>) {
         sync.stop();
     }
     state.execution.stop_accepting();
+    state.harness.close().await;
     state.operations.cancel_all();
     state.execution.cancel_all();
     drain_sync(&state).await;
@@ -104,7 +111,7 @@ async fn shutdown(state: Arc<State>) {
         .is_err()
     {
         emit(
-            fs_agent::core::events::Level::Warn,
+            pi_agent::core::events::Level::Warn,
             "server.drain_timeout",
             json!({"timeoutMs": DRAIN_TIMEOUT.as_millis()}),
         );
@@ -113,7 +120,7 @@ async fn shutdown(state: Arc<State>) {
     tokio::spawn(async move {
         tokio::time::sleep(CONNECTION_GRACE).await;
         emit(
-            fs_agent::core::events::Level::Info,
+            pi_agent::core::events::Level::Info,
             "server.connection_grace_elapsed",
             json!({}),
         );
@@ -129,7 +136,7 @@ async fn drain_sync(state: &State) {
     match tokio::time::timeout(DRAIN_TIMEOUT, work).await {
         Ok(Ok(Ok(()))) => {}
         result => emit(
-            fs_agent::core::events::Level::Warn,
+            pi_agent::core::events::Level::Warn,
             "sync.drain_failed",
             json!({"result":format!("{result:?}"),"recoveryRequired":true}),
         ),

@@ -1,7 +1,7 @@
 //! Export-level behaviour that does not need HTTP: capability opening, restart
 //! recovery and revision retirement.
 
-use fs_agent::fs::{Export, Exports};
+use pi_agent::fs::{Export, Exports};
 
 #[test]
 fn exclusive_open_holds_the_lock_and_a_second_open_fails() {

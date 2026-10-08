@@ -300,7 +300,7 @@ impl SyncService {
     pub fn drain_timeout(&self, timeout: std::time::Duration) -> Result<()> {
         self.tasks.drain(timeout)
     }
-    pub(super) fn activity(&self) -> Result<super::coordination::Activity> {
+    pub(crate) fn activity(&self) -> Result<super::coordination::Activity> {
         self.tasks.enter(false)
     }
     pub(super) fn cleanup_activity(&self) -> Result<super::coordination::Activity> {

@@ -27,6 +27,7 @@ pub async fn content(
     Query(query): Query<ListQuery>,
 ) -> Result<Response, Error> {
     let (_, export) = access::export(&state, &headers, &alias)?;
+    let _project_guard = access::project_path(&state, &headers, &alias, &query.path, false, false)?;
     let gate = state.files.shared()?;
     let deadline = access::deadline(&headers)?;
     let (file, revision) = state

@@ -2,8 +2,8 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use fs_agent::{app::State, config::Config, router};
 use http_body_util::BodyExt;
+use pi_agent::{app::State, config::Config, router};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -40,7 +40,7 @@ async fn terminal(app: &axum::Router, path: &str) -> Value {
 
 #[tokio::test]
 async fn native_execution_confines_mounts_fences_revisions_and_cancels() {
-    if std::env::var("FS_AGENT_PROCESS_TEST").as_deref() != Ok("1") {
+    if std::env::var("PI_AGENT_PROCESS_TEST").as_deref() != Ok("1") {
         return;
     }
     let root = tempfile::tempdir().unwrap();
@@ -69,7 +69,7 @@ path = "{}"
     ))
     .unwrap();
     let state = State::from_config(&config).unwrap();
-    fs_agent::process::enable(&state).await.unwrap();
+    pi_agent::process::enable(&state).await.unwrap();
     let epoch = state.execution.epoch().to_owned();
     let app = router(state.clone(), &[]).unwrap();
     let request = json!({"serverId":"test-node", "epoch":epoch, "requestId":"one", "command":"/bin/bash", "args":["-c", "set -eu; test \"$(pwd)\" = /workspace; cat ../reference/guide; if echo bad > /reference/guide 2>/dev/null; then exit 7; fi; echo after > note"], "cwd":"/workspace", "timeoutMs":5000,

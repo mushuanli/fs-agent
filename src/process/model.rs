@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 /// Maximum retained process records before new commands are refused.
 pub const CAPACITY: usize = 1024;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Mount {
     /// Export alias the directory comes from.
@@ -34,6 +34,12 @@ pub struct Request {
     pub server_id: String,
     pub epoch: String,
     pub request_id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_revision: Option<u64>,
+    #[serde(default)]
+    pub read_only: bool,
     pub command: String,
     pub args: Vec<String>,
     pub cwd: String,

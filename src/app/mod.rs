@@ -38,17 +38,38 @@ pub struct State {
     pub operations: Operations,
     pub execution: Execution,
     pub sync: Option<Arc<crate::sync::SyncService>>,
+    pub harness: crate::harness::Harnesses,
+    pub projects: Option<Arc<crate::projects::ProjectService>>,
+    pub allowed_origins: Vec<String>,
 }
 
 impl State {
     /// Validate a parsed configuration and build the runtime.
     pub fn from_config(config: &Config) -> Result<Arc<Self>, String> {
+        Self::from_config_with_plugins(config, crate::harness::HarnessPlugins::default())
+    }
+    pub fn from_config_with_plugins(
+        config: &Config,
+        plugins: crate::harness::HarnessPlugins,
+    ) -> Result<Arc<Self>, String> {
         validate_identity(config)?;
         let sync = open_sync(config)?;
+        let projects = config
+            .projects
+            .as_ref()
+            .map(|p| crate::projects::ProjectService::open(p, config).map(Arc::new))
+            .transpose()?;
         let exports = configured_exports(config)?;
         let auth = configured_auth(config, &exports)?;
         let mut state = Self::new(auth, exports)?;
         Arc::get_mut(&mut state).unwrap().sync = sync;
+        Arc::get_mut(&mut state).unwrap().projects = projects;
+        Arc::get_mut(&mut state).unwrap().harness = crate::harness::Harnesses::with_plugins(
+            crate::harness::config::validate_with_plugins(config, &plugins)?,
+            hex(&random_bytes()?),
+            plugins,
+        )?;
+        Arc::get_mut(&mut state).unwrap().allowed_origins = config.allowed_origins.clone();
         Ok(state)
     }
 
@@ -66,6 +87,9 @@ impl State {
             operations: Operations::default(),
             execution: Execution::new(hex(&random_bytes()?)),
             sync: None,
+            projects: None,
+            harness: crate::harness::Harnesses::new(vec![], hex(&random_bytes()?))?,
+            allowed_origins: vec![],
         }))
     }
 
@@ -84,8 +108,12 @@ impl State {
             files: FileGate::new(),
             workers: Workers::new(WORKER_LIMIT),
             operations: Operations::default(),
-            execution: Execution::new(process_epoch),
+            execution: Execution::new(process_epoch.clone()),
             sync: None,
+            projects: None,
+            harness: crate::harness::Harnesses::new(vec![], process_epoch.clone())
+                .expect("Empty harness catalog is valid"),
+            allowed_origins: vec![],
         })
     }
 }
@@ -109,7 +137,9 @@ fn open_sync(config: &Config) -> Result<Option<Arc<crate::sync::SyncService>>, S
         .map_err(|e| e.to_string())
 }
 fn configured_exports(config: &Config) -> Result<Exports, String> {
-    let pure_sync = config.sync.as_ref().is_some_and(|s| s.enabled) && !config.execution;
+    let pure_sync = (config.sync.as_ref().is_some_and(|s| s.enabled)
+        || !config.harnesses.is_empty())
+        && !config.execution;
     if pure_sync && config.exports.is_empty() {
         Ok(Exports::new(std::collections::BTreeMap::new()))
     } else {
@@ -131,7 +161,9 @@ fn configured_auth(config: &Config, exports: &Exports) -> Result<Auth, String> {
     );
     let server_id = match &config.server_id {
         Some(id) => Some(id.clone()),
-        None if config.execution => Some(format!("fs-agent-{}", hex(&random_bytes()?))),
+        None if config.execution || !config.harnesses.is_empty() => {
+            Some(format!("pi-agent-{}", hex(&random_bytes()?)))
+        }
         None => None,
     };
     Ok(Auth::new(server_id, vec![client]))
@@ -139,6 +171,9 @@ fn configured_auth(config: &Config, exports: &Exports) -> Result<Auth, String> {
 
 /// Reject configurations that cannot be served safely.
 fn validate_identity(config: &Config) -> Result<(), String> {
+    if config.projects.is_some() && config.server_id.is_none() {
+        return Err("Project management requires a stable server_id".into());
+    }
     if let Some(id) = &config.server_id {
         if !ids::is_identifier_within(id, ids::IDENTIFIER_MAX) {
             return Err("server_id must contain 1..128 ASCII letters, digits, '-' or '_'".into());

@@ -27,6 +27,7 @@ pub async fn entries(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, Error> {
     let (identity, export) = access::export(&state, &headers, &alias)?;
+    let _project_guard = access::project_path(&state, &headers, &alias, &query.path, false, false)?;
     let deadline = access::deadline(&headers)?;
     let binding = format!("{identity}:{alias}:{}", query.path);
     let after = query

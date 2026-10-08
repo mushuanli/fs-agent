@@ -91,10 +91,8 @@ fn publish(
     }
     let staged = export.stage(path)?;
     staged.writer()?.write_all(&bytes)?;
-    Ok(
-        serde_json::to_value(upload::commit(export, path, staged, revision, checkpoint)?)
-            .map_err(|_| Error::internal())?,
-    )
+    serde_json::to_value(upload::commit(export, path, staged, revision, checkpoint)?)
+        .map_err(|_| Error::internal())
 }
 fn apply(
     db: &mut Connection,

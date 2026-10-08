@@ -37,6 +37,11 @@ pub async fn stat(
     {
         return Err(Error::invalid());
     }
+    let _project_guards = input
+        .paths
+        .iter()
+        .map(|path| access::project_path(&state, &headers, &alias, path, false, true))
+        .collect::<Result<Vec<_>, _>>()?;
     state
         .workers
         .run(&state.files, deadline, move |token| {

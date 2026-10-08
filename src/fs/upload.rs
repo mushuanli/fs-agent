@@ -96,6 +96,28 @@ pub fn commit(
     expected: Option<&str>,
     checkpoint: impl Fn() -> Result<(), Error>,
 ) -> Result<Stat, Error> {
+    publish(export, path, upload, expected, None, checkpoint)
+}
+
+/// Publish durable sync contents and executable bits in the same rename.
+pub fn commit_executable(
+    export: &Export,
+    path: &str,
+    upload: StagedUpload,
+    expected: Option<&str>,
+    executable: bool,
+    checkpoint: impl Fn() -> Result<(), Error>,
+) -> Result<Stat, Error> {
+    publish(export, path, upload, expected, Some(executable), checkpoint)
+}
+fn publish(
+    export: &Export,
+    path: &str,
+    upload: StagedUpload,
+    expected: Option<&str>,
+    executable: Option<bool>,
+    checkpoint: impl Fn() -> Result<(), Error>,
+) -> Result<Stat, Error> {
     let mut revisions = export
         .lock_revisions()
         .ok_or_else(|| Error::forbidden("EROFS"))?;
@@ -105,13 +127,24 @@ pub fn commit(
     if identity(&target) != identity(&upload.parent) {
         return Err(Error::precondition_failed());
     }
-    let mode = match expected {
+    let mut mode = match expected {
         Some(expected) => replaced_mode(export, path, expected, &mut revisions)?,
         None => DEFAULT_FILE_MODE,
     };
+    if let Some(executable) = executable {
+        let bits = if executable {
+            mode.bits() | 0o111
+        } else {
+            mode.bits() & !0o111
+        };
+        mode = Mode::from_bits_truncate(bits);
+    }
     checkpoint()?;
     // Give the published inode the mode the caller would expect to find.
     rustix::fs::fchmod(&upload.file, mode)?;
+    if executable.is_some() {
+        upload.file.sync_all()?;
+    }
     let mut stat = attributes(&upload.file)?;
     stat.revision = Some(revisions.get(&upload.file)?);
     rustix::fs::renameat_with(

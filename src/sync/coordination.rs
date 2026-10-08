@@ -13,7 +13,7 @@ pub(super) struct Coordination {
     state: Mutex<State>,
     changed: Condvar,
 }
-pub(super) struct Activity(Arc<Coordination>);
+pub(crate) struct Activity(Arc<Coordination>);
 impl Coordination {
     pub fn enter(self: &Arc<Self>, cleanup: bool) -> Result<Activity> {
         let mut state = self.state.lock().map_err(|_| Error::storage())?;

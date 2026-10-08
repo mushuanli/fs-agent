@@ -1,25 +1,27 @@
-# fs-agent — HTTP 文件服务
+# pi-agent — MindOS 的个人智能节点
+
+pi-agent 将设备上的文件、项目和执行环境接入 MindOS，统一提供同步、受控访问及 AI harness 会话管理。MindOS 组织知识、对话和工作流，pi-agent 连接设备上的数据与执行能力。PI 表示 Personal Information（个人信息）。
+
+服务源码：[pi-agent](https://github.com/mushuanli/pi-agent)；统一客户端：[piagent-driver](https://github.com/mushuanli/piagent-driver)，npm 包为 `@itookit/piagent-driver`。
 
 服务端目前支持 Linux（需要 `openat2`）；Web、Tauri 和 Node CLI 使用同一 HTTP 协议。服务启动时验证目录句柄能力，不支持时拒绝启动。
 
 ```bash
-# 在本项目根目录执行（itookit monorepo 内即 tools/fs-agent，作为 submodule）
+# 在本项目根目录执行（itookit monorepo 内即 tools/pi-agent，作为 submodule）
 cargo build --release
 # 复制 config.example.toml，设置实际目录、监听地址和允许的 Web/Tauri Origin。
-export FS_SERVER_USER='workbench'
-export FS_SERVER_PASSWORD='替换为至少8字节的密码'
-target/release/fs-agent                     # 自动读取 config.toml
-target/release/fs-agent /path/to/config.toml # 也可显式指定
+export PI_AGENT_API_KEY='替换为至少24字节的API-Key'
+target/release/pi-agent                     # 自动读取 config.toml
+target/release/pi-agent /path/to/config.toml # 也可显式指定
 ```
 
-配置只有一个用户和一串导出目录：
+文件模式配置一组认证凭据和一串导出目录；可额外启用外部 harness 控制：
 
 ```toml
 listen = "127.0.0.1:8787"
 allowed_origins = ["http://localhost:3000", "http://localhost:1420"]
 
-username = "li"                      # 省略时读 FS_SERVER_USER
-password_env = "FS_SERVER_PASSWORD"  # 也可内联 password = "至少8字节"
+api_key_env = "PI_AGENT_API_KEY"      # 也可内联 api_key = "至少24字节"
 
 [[exports]]
 path = "/n/prj/x1"                   # 别名默认取目录名：x1
@@ -35,11 +37,11 @@ access = "rw"                        # 默认 ro；rw 自动加独占锁
 
 默认只读。需要写入时，在对应 `[[exports]]` 增加 `access = "rw"`（自动请求独占锁）。工作台添加挂载时再勾选允许写入；三层权限都允许才能修改。
 
-`exclusive` 要求所有修改经本服务完成；目录上的 advisory lock 阻止合作的同根实例，不能阻止编辑器、Git 或其他外部程序。配置内拒绝重叠根与重复别名；不同实例的父子导出根仍需部署侧禁止。共享修改目录使用 `ro`。服务支持 HTTP；公网部署在 TLS 反向代理之后。Origin 白名单只解决浏览器访问，不代替身份认证。用户名/密码使用 UTF-8 HTTP Basic，密码至少 8 字节：用户名取 `username`，未写时读环境变量 `FS_SERVER_USER`；密码取内联 `password` 或 `password_env` 指向的环境变量。Basic 凭据不加密，非可信本机网络应使用 HTTPS。旧 Bearer 配置继续支持内联 `token` 或 `token_env`（至少 24 字节，且不设置 `username`），与密码字段四选一；同时设置 `username` 与 `token`/`token_env` 会启动失败，避免看起来是 Basic 实际只收 Bearer。内联 secret 写在服务端配置文件中，需按主机密钥文件管理权限，且不会输出到日志。
+`exclusive` 要求所有修改经本服务完成；目录上的 advisory lock 阻止合作的同根实例，不能阻止编辑器、Git 或其他外部程序。配置内拒绝重叠根与重复别名；不同实例的父子导出根仍需部署侧禁止。共享修改目录使用 `ro`。服务支持 HTTP；公网部署在 TLS 反向代理之后。Origin 白名单只解决浏览器访问，不代替身份认证。用户名/密码使用 UTF-8 HTTP Basic，密码至少 8 字节：用户名取 `username`，未写时读环境变量 `FS_SERVER_USER`；密码取内联 `password` 或 `password_env` 指向的环境变量。Basic 凭据不加密，非可信本机网络应使用 HTTPS。推荐 `api_key` 或 `api_key_env`（至少 24 字节、不设置 `username`），使用 Bearer 认证；旧名称 `token`/`token_env` 仍兼容，但不能和对应新名称同时配置。API Key 与密码认证互斥；同时设置 `username` 与 `token`/`token_env` 会启动失败，避免看起来是 Basic 实际只收 Bearer。内联 secret 写在服务端配置文件中。API Key 按启动连接提示输出到 console，不放入结构化事件或 HTTP 响应；旧 Basic 密码不输出。
 
-在 Settings → Storage → “远程文件系统”点击“添加远程文件系统”，填写名称、IP:端口（或完整 HTTP(S) 地址）、用户名和密码。工作台“+ 项目”选择本地或远程；远程项目选择连接名称和路径，例如 `/docs/project-a`。第一段为服务端导出别名，后续路径位于该导出之内；项目文件根直接对应此目录，Session 使用 `/workspace` 访问。同一服务的相同规范化路径复用同一个项目，不同路径可创建多个项目。全局不再提供“+ 会话”，在项目内部创建会话。
+在“工具箱 → MCP”新增 HTTP 配置，填写完整 MCP 地址（例如 `http://127.0.0.1:8787/mcp`），将服务启动时输出的 API Key 填入同名字段并测试连接。通用发现响应已携带 pi-agent 能力描述；应用扩展验证后启用项目绑定，不需要额外用户名、密码或勾选框。旧服务器使用其已声明的能力工具。测试后的保存和改名复用验证结果，普通 MCP 不发 pi-agent 专用探测。只有验证成功的 pi-agent 配置可以用于目录绑定，普通 MCP 即使同名也不能绑定。可配置多条连接；工作台新建远程项目选择 MCP 配置和 `/alias/path`。项目展示“服务器名:项目名”，同一服务器、账号与规范化路径复用已有项目，改名不移动目录。
 
-连接配置和项目引用会持久保存，密码仅保存在宿主运行期；重启后在设置编辑连接并重新输入密码。CLI 持久配置引用由 `MINDOS_REMOTE_<credentialRef中横线替换为下划线>` 环境变量解析。直接 `mindos fs` 使用 `FS_SERVER_USER` + `FS_SERVER_PASSWORD`；未设置用户名时兼容 `FS_SERVER_TOKEN`。
+连接配置、API Key 和项目引用通过现有 MCP 配置持久保存；应用重启时从已验证的 MCP 配置恢复驱动凭据，无需重新输入。旧 Basic 配置的密码仍只保存在宿主运行期。CLI 持久配置引用由 `MINDOS_REMOTE_<credentialRef中横线替换为下划线>` 环境变量解析。直接 `mindos fs` 使用 `FS_SERVER_USER` + `FS_SERVER_PASSWORD`；未设置用户名时兼容 `FS_SERVER_TOKEN`。
 
 ```bash
 # 使用已构建的 CLI；也可以通过现有 CLI 开发入口运行。
@@ -57,14 +59,14 @@ API：`GET /v1/exports`、`POST /v1/fs/:alias/stat`（`{paths}`）、`GET entrie
 
 ```bash
 cargo test                                  # 本项目根目录
-pnpm --filter @itookit/vfsdriver-agent test  # 在 itookit monorepo 内
+pnpm --filter @itookit/piagent-driver test  # 在 itookit monorepo 内
 ```
 
 驱动测试在 Linux 启动真实 Rust 服务，验证协议、条件保存和 VFS 适配；其他平台跳过该服务端集成测试。设计和验收边界见 [设计文档](../../doc/design/vfs-http-driver.md)。
 
 包含远程来源的项目显示独立远程图标。服务断线时，仅关联项目的文件操作和新会话置灰禁用，已有会话仍可查看，其他项目继续可用；Settings 的重连入口保持可用。恢复连接后解除禁用。
 
-## fs-agent 增量接口
+## pi-agent 增量接口
 
 `GET /v1/capabilities` 需要认证，返回安装身份及文件/同步/进程/终端支持情况。可在配置顶层指定稳定的 `server_id = "my-agent-node"`；未配置时为启用执行的服务生成本次启动的随机节点标识（不保证跨重启不变）。命令执行默认开启，配置顶层 `execution = false` 可切换为纯文件服务。启用执行时，启动会验证 Linux bubblewrap、fd 挂载及 user namespace 支持，失败即退出。`sync.push` 在同步服务开启且健康时为 true，详细能力通过 `/v1/sync/capabilities` 查询；`terminal.pty` 仍为 false；普通命令不依赖工作区租约模块。
 
@@ -81,11 +83,11 @@ MindOS 项目右键菜单选择“启用远程命令”后，File Tools 和 Bash
 
 命令持有文件/进程互斥门，运行期间所有文件 API 返回 EBUSY；下载流、上传与后台提交保留其门直到结束。命令退出/取消并回收后使所有旧 revision 失效，避免 Bash 改动绕过条件写入。exclusive export 不允许其他宿主进程并发写入。执行锁在 monitor 中保留，daemon 意外退出后锁随进程清理释放。
 
-验收：`FS_AGENT_PROCESS_TEST=1 cargo test`（要求可创建 Linux user/PID/network namespace）。
+验收：`PI_AGENT_PROCESS_TEST=1 cargo test`（要求可创建 Linux user/PID/network namespace）。
 
 ## 项目多端同步
 
-同步存储、配置、管理员备份恢复与 HTTP 协议见 [单节点同步存储](doc/sync.md)。纯同步实例可使用 [config.sync.example.toml](config.sync.example.toml)，无需配置 export；sync.root 不存在或为空时首次启动自动初始化，也可先用 `fs-agent sync init CONFIG` 显式初始化。同步库与 export 使用独立目录，不自动发布工作目录的变化。
+同步存储、配置、管理员备份恢复与 HTTP 协议见 [单节点同步存储](doc/sync.md)。纯同步实例可使用 [config.sync.example.toml](config.sync.example.toml)，无需配置 export；sync.root 不存在或为空时首次启动自动初始化，也可先用 `pi-agent sync init CONFIG` 显式初始化。同步库与 export 使用独立目录，不自动发布工作目录的变化。
 
 ## 代码结构
 
@@ -112,7 +114,7 @@ MindOS 项目右键菜单选择“启用远程命令”后，File Tools 和 Bash
 
 ## 日志
 
-顶层 `log_level = "debug"` 为默认值，可设 `trace/debug/info/warn/error/off`。事件输出到 stderr，使用 JSON 行，包含时间、级别、事件名及结构化字段。
+顶层 `log_level = "info"` 为默认值，可设 `trace/debug/info/warn/error/off`。事件输出到 stderr，使用 JSON 行；每行首先输出带毫秒和本机时区偏移的可读 `time`，再输出 level、event、fields，末尾保留 Unix 毫秒 `timeMs` 供程序处理。例如 `{"time":"2026-10-08T13:44:42.034+08:00","level":"info","event":"server.ready","fields":{"address":"127.0.0.1:8787"},"timeMs":1791438282034}`。时区使用服务进程的本地设置，可通过 `TZ` 调整。sync.diagnostics 是每分钟的调试性能汇总，仅在 debug/trace 下输出；普通运行保持 info 即可。
 
 - debug：文件变更/命令准入；info：启动就绪、变更提交、命令启动与成功结束、取消和关闭。
 - warn/error：认证拒绝、HTTP 错误、命令非零退出、超时、启动或清理失败；保留操作/请求 ID、状态和退出码。
@@ -125,3 +127,61 @@ MindOS 项目右键菜单选择“启用远程命令”后，File Tools 和 Bash
 在 export 内通过 `POST /v1/fs/:alias/seq/snapshot` 读取 `{path}` 指定的 `.seq`，返回 `{revision,entries:[{key,value}]}`。`POST /v1/fs/:alias/seq/transaction` 使用 `X-Operation-Id`，请求为 `{path,expectedRevision,changes}`：变更项为 `{action:"set",key,value}` 或 `{action:"delete",key}`。创建时 revision 为 null；更新时必须携带读取的 revision。
 
 每个 SeqFile 是可复制的 SQLite 数据库。服务端执行结构化单文件事务，再复用条件文件替换与持久回执；不接受任意 SQL。读取缺失文件不创建文件，父目录需提前创建。只读 export 禁止写入。每文件最多 16 MiB、每批最多 256 项、key 最多 1024 字节，HTTP 请求体仍有独立上限。并发冲突返回 ECONFLICT；unknown 结果使用现有操作查询确认，不自动重放。此接口与 sync 对象库无关，不提供跨 SeqFile 事务。
+
+## Codex 控制中心（MCP 2.0）
+
+### Harness 插件扩展
+
+服务使用编译时注册的 `HarnessPlugin` / `HarnessPlugins` 插件接口。默认注册 Codex；`kind` 由注册表识别，未注册插件在启动验证时拒绝。插件负责原生协议、会话存储读取、进程初始化及统一会话/事件/交互格式，公共服务负责 epoch/requestId、回执、串行修改、项目授权、实例缓存和关闭。项目 launcher 接收插件指定的启动参数，不再固定 Codex 参数。
+
+新增实现可通过 `HarnessPlugins::register` 注册，使用 `State::from_config_with_plugins` 装配；标准二进制的内置插件在注册表默认实现中声明。普通实例与项目实例都通过同一个插件工厂创建，项目实例接收 `ProjectRuntime` 并使用共同目录授权及 launcher。插件是可信的进程内代码，当前不支持动态库加载或外部插件自动发现。Claude Code、DeepSeek 等尚未实现，配置一个 kind 名字不会创建对应驱动。
+
+启动时（日志级别 info 或更详细）输出可复制的 MCP endpoint、serverId、认证方式、凭据来源及实际 API Key；旧 Basic 配置只显示用户名和密码来源。监听通配地址时另外尝试显示默认路由的本机 IP 候选；多网卡、容器、NAT 或代理场景仍需填写客户端实际可达地址。该探测不发送 UDP 数据包，也不发现公网地址。
+
+认证使用每请求的 HTTP Basic 或 Bearer，没有 cookie 登录会话和自动到期时间；配置凭据不变时，服务重启后仍有效。itookit 的 pi-agent 项目绑定支持标准 MCP API Key（Bearer）和旧 Basic 配置；API Key 使用 MCP 既有存储，驱动运行时只保留内存副本。API Key 不写入项目挂载记录，MCP 导出仍移除 API Key。
+
+使用 [config.harness.example.toml](config.harness.example.toml) 配置。`harnesses` 缺省为空，不启动或访问 Codex；每个 profile 显式设置已存在的绝对 CODEX_HOME 和授权 workspace。运行 pi-agent 的系统用户需已有 Codex 登录状态及已安装的 CLI。要浏览当前用户 ~/.codex 的会话，填写该目录的实际绝对路径；TOML 不展开 `~`。不读取未配置的其他 home，不把 auth.json 等密钥文件作为会话返回。
+
+`execution = false` 关闭原有 shell 服务，但仍可启用 harness；无需 exports 即可仅运行控制中心。workspace 必须与 exclusive rw exports 分离（启动时拒绝重叠），可用 ro export 浏览相同目录。`server_id` 可设置稳定服务身份。
+
+Web/Tauri 在工具箱 MCP 配置并测试连接后，在支持 harness 的 pi-agent 配置中点击“控制中心”。支持 profile/workspace、新建、分页/归档列表、历史、继续、发送、增量输出、命令/文件审批、用户问题、显式中断和未知请求收据确认。历史浏览不会接管会话；继续仅允许授权 cwd、拒绝接管其他宿主的活跃线程。关闭面板只释放客户端连接，服务端 turn 继续运行。CLI 宿主已统一 adapter 接入，独立 harness 命令行界面尚未提供。
+
+服务提供认证后的 `POST /mcp`：MCP SDK 2.0.0 / 协议 2026-07-28，支持 server/discover、tools/list/call、ping；不宣告 Tasks 扩展。工具为 piagent_capabilities、harness_profiles、harness_sessions、harness_session_read、harness_events、harness_operation、harness_create、harness_resume、harness_turn、harness_interrupt、harness_respond。请求验证 protocol/version、method/name 和客户端 metadata，带 Origin 的请求还验证允许列表。Codex 控制采用官方 app-server stdio JSON-RPC，命令和目录只来自服务端配置。
+
+已验证 Codex CLI 0.159.2。项目沙箱在配置的真实绝对路径挂载 harness home，并保留 `/harness` 兼容入口，避免原生 SQLite 索引中的绝对日志路径失效。`harness_session_info` 只读取元信息；普通会话历史优先原生 API，paginated 会话及 `toolDetail: "summary"` 请求读取 home 下 sessions/archived_sessions JSONL。历史使用 8 MiB 的日志窗口，必要时通过有界缓冲向前查找真实 turn_context/task_started，返回最多 100 项/2 MiB，通过 `nextCursor` 加载更早内容。保留真实 turnId、时间和消息内容数组，兼容 custom_tool_call；摘要模式在分页预算前去除工具参数和输出，只返回工具名称、操作、首个非空命令行（最多 240 个字符）和目标文件。事件也支持摘要模式并保留原始游标及审批请求。原生 createdAt/updatedAt 分别统一转换为毫秒，缺失时间返回 null；空名称回退原生请求预览，branchName 独立返回；session.native 不重复附带整份 turns。路径禁止符号链接，未完成尾行等待刷新；不修改原生索引或日志。继续会话使用 `thread/resume` 的 `excludeTurns`，由原生 CLI 确认可用性。
+
+`harness_fork` 调用原生 `thread/fork`，可选名称经 `thread/name/set` 保存，返回 `parentSessionId`。仅授权项目的可写会话允许创建分支；空会话、活动会话和未知结果期间 UI 禁用创建。分支创建同样携带 epoch/requestId，并以回执避免重放。分支是独立的原生会话，历史保留在 harness home。
+
+限制：每 profile 1024 条进程内修改收据、128 个 pending 调用/交互、事件环最多 1024 项/8 MiB、待审批总量最多 8 MiB、每轮提示最多 128 KiB、原生单行最多 8 MiB；客户端 MCP 响应最多 32 MiB。输出 gap 显示需要刷新历史。发送结果未知不重放；epoch 改变表示服务已重启，旧收据不再可确认。app-server 退出后本 profile 拒绝继续写入；需服务重启重新发现，避免悄悄失去接管关系。服务关闭回收监管进程组；主动脱离该组的后代不属于此回收保证。
+
+验证（在 itookit 根目录）：
+
+```bash
+cargo test --offline --manifest-path tools/pi-agent/Cargo.toml
+PI_AGENT_CODEX_TEST=1 cargo test --offline --manifest-path tools/pi-agent/Cargo.toml --test harness
+PI_AGENT_HARNESS_TEST=1 pnpm --filter @itookit/piagent-driver test tests/network.test.ts
+```
+
+第一项包含原生协议模拟测试；第二项用独立临时 CODEX_HOME 启动真实 Codex，只验证创建/历史，不调用模型，也不读取个人会话；第三项用真实 MCP SDK、Rust HTTP 服务和模拟 Codex 验证完整操作。
+
+server/discover 的 `_meta['itookit/pi-agent']` 返回文件协议版本、同源相对 HTTP 端点、安装 serverId、项目和 harness 支持；piagent_capabilities 返回同一描述并保留旧客户端兼容。客户端优先复用标准发现响应，不根据名字判断服务；该描述是本服务扩展，不是 MCP 标准保证。建议显式配置全局唯一且稳定的 server_id，以识别同一安装的不同访问地址。多个原生 harness 由服务端插件注册表适配，共用这一 MCP 连接；当前内置 Codex。
+
+
+## 目录项目模式
+
+[config.projects.example.toml](config.projects.example.toml) 开启服务端项目 catalog。导出根是项目选择范围，`project_register` 可以绑定其任意层级子目录，或在已有父目录下创建一个新目录。文件、bash 和项目 Codex 使用同一份目录及挂载授权，sync 数据项目独立。稳定 server_id 必须配置，catalog 和 native home 不可放入导出根。
+
+MCP 提供 project_roots/list/read/register/configure/exec；harness 工具增加 projectId/revision/readOnly 上下文。新 harness profile 设置 projects=true，在外层 bubblewrap 内运行；命令应指向可独立运行的 native binary。projects.network 默认为 false；联网需显式开启。目标挂载目录先创建，再提交策略。无法启用沙箱时拒绝执行。
+
+当前 FileGate 是安装级，turn 执行期间文件请求可能返回 EBUSY。VMM 和项目级并发尚未实现，已留共同 ProjectLauncher 端口。详细授权、兼容行为与验证范围见 [项目模型](../../doc/design/pi-agent-project-model.md)。
+
+同时启用 `[projects]` 与 `[sync]` 后，目录绑定支持数据集落地、目录回传和双向同步。
+使用 `project_sync_directories` 浏览项目内的已有子目录；绑定和预览不写入文件。
+`project_sync_configure` 根据 policyRevision 改方向并使旧预览失效。
+`project_sync_preview` 返回新增／覆盖操作、方向和包含两侧摘要的 conflictDetails。
+`project_sync_compare` 对当前计划提供最多 256 KiB 的 UTF-8 文本及基线；二进制和大文件只返回说明。
+`project_sync_resolve` 选择 dataset／directory 来源并生成新的 planId，复核后使用 execute 确认。
+回传复用 sync 的 CAS 发布与持久回执，关闭面板或未知结果时通过 status 继续同一计划。
+默认更新模式保留目标独有文件，不传播删除、不穿透附加挂载或 .mindos；镜像删除未开放。
+
+服务曾名为 fs-agent。升级时继续使用原 config.toml、server_id、API Key、projects.root、sync.root 和 harness home；数据目录无需改名。新程序为 pi-agent，MCP 主发现工具为 piagent_capabilities，旧 fsagent_capabilities 保留为兼容别名。文件／项目协议标识、HTTP 授权头和 fs-agent.files／fs-agent.bundle 的规范编码沿用原格式，已有摘要、历史和绑定可以继续使用。

@@ -1,4 +1,4 @@
-use fs_agent::fs::{
+use pi_agent::fs::{
     seq::{self, Change, Update},
     Export,
 };
@@ -117,7 +117,7 @@ fn cancelled_or_invalid_batch_keeps_the_original_database() {
             expected_revision: snapshot.revision,
             changes: vec![]
         },
-        || Err(fs_agent::core::error::Error::cancelled())
+        || Err(pi_agent::core::error::Error::cancelled())
     )
     .is_err());
     assert_eq!(std::fs::read(root.path().join("info.seq")).unwrap(), bytes);

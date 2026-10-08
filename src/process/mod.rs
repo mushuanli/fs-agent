@@ -15,11 +15,11 @@
 
 mod execution;
 mod model;
-mod policy;
+pub mod policy;
 mod runner;
-mod sandbox;
+pub mod sandbox;
 mod service;
 
 pub use execution::{enable, Execution};
-pub use model::{Process, Registry, Request, Status};
+pub use model::{Mount, Process, Registry, Request, Status};
 pub use service::{cancel, start, status};

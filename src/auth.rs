@@ -63,7 +63,8 @@ impl Client {
     }
 
     /// The configured secret. Exposed for configuration tests and diagnostics;
-    /// it must never be logged or included in a response.
+    /// Only the startup console may show it; never include it in structured
+    /// events or HTTP responses.
     pub fn secret(&self) -> &str {
         &self.secret
     }

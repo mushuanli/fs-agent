@@ -138,9 +138,9 @@ def devices(server):
 
 
 def main():
-    default_binary = Path(__file__).resolve().parents[1] / "target/debug/fs-agent"
+    default_binary = Path(__file__).resolve().parents[1] / "target/debug/pi-agent"
     binary = str(Path(sys.argv[1] if len(sys.argv) > 1 else default_binary).resolve())
-    with tempfile.TemporaryDirectory(prefix="fs-agent-sync-http-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="pi-agent-sync-http-") as temporary:
         directory = Path(temporary)
         original = Server(binary, directory, directory / "root")
         restored = Server(binary, directory, directory / "restored")

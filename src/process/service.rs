@@ -17,13 +17,12 @@ use std::sync::Arc;
 /// Start a command, or return the record of an identical earlier request.
 pub fn start(state: &Arc<State>, identity: usize, request: Request) -> Result<Status, Error> {
     let id: String = request.request_id.chars().take(128).collect();
-    start_authorized(state, identity, request).map_err(|error| {
+    start_authorized(state, identity, request).inspect_err(|error| {
         crate::core::events::emit(
             crate::core::events::Level::Warn,
             "process.rejected",
             serde_json::json!({"requestId": id, "identity": identity, "code": error.code}),
         );
-        error
     })
 }
 
@@ -48,7 +47,9 @@ fn start_authorized(
                     Some(export) => export.try_clone_root()?,
                     None => state.execution.lock_handle()?,
                 };
-                let prepared = sandbox::assemble(&plan, lock)?;
+                let prepared = if request.project_id.is_some() {
+                    state.projects.as_ref().ok_or_else(Error::unsupported)?.launcher.prepare_process(&plan,lock)?
+                } else {sandbox::assemble(&plan, lock)?};
                 let process = Arc::new(Process::new());
                 crate::core::events::emit(crate::core::events::Level::Debug, "process.accepted", serde_json::json!({"requestId": request.request_id,
                     "identity": identity, "cwd": plan.cwd, "mountCount": plan.mounts.len(), "timeoutMs": plan.timeout_ms}));

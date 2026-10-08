@@ -27,6 +27,14 @@ impl VersionAvailability {
     }
 }
 impl SyncService {
+    pub fn directory_head(&self, project: &str, id: &str) -> Result<Value> {
+        self.with_read(|db| {
+            policy::id(id)?; self.project(db, project, true)?;
+            let dataset: Dataset = m::require(db, project, "dataset", id)?;
+            if dataset.state != "active" || dataset.kind != "files" { return Err(Error::new("INVALID_DIRECTORY_DATASET",409)); }
+            Ok(json!({"generation":dataset.head.generation,"manifestHash":dataset.head.manifest_hash}))
+        })
+    }
     pub(super) fn event(
         &self,
         db: &Connection,
