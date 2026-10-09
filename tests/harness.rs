@@ -481,3 +481,203 @@ async fn native_management_preserves_history_and_never_adopts_or_replays_mutatio
     assert_eq!(denied["code"], "HARNESS_SESSION_NOT_OWNED");
     service.close().await;
 }
+
+#[tokio::test]
+async fn permanent_deletion_checks_ownership_and_keeps_a_replay_safe_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service(root.path());
+    mutate(
+        &service,
+        "harness_create",
+        "create-delete",
+        json!({"workspaceId":"project"}),
+    )
+    .await;
+    let denied = mutate(
+        &service,
+        "harness_delete",
+        "delete-foreign",
+        json!({"sessionId":"foreign"}),
+    )
+    .await;
+    assert_eq!(denied["code"], "EACCES");
+    mutate(
+        &service,
+        "harness_turn",
+        "start-delete",
+        json!({"sessionId":"session-1","prompt":"running"}),
+    )
+    .await;
+    let busy = mutate(
+        &service,
+        "harness_delete",
+        "delete-busy",
+        json!({"sessionId":"session-1"}),
+    )
+    .await;
+    assert_eq!(busy["code"], "EBUSY");
+    mutate(
+        &service,
+        "harness_interrupt",
+        "stop-delete",
+        json!({"sessionId":"session-1","turnId":"turn-1"}),
+    )
+    .await;
+    mutate(
+        &service,
+        "harness_archive",
+        "archive-delete",
+        json!({"sessionId":"session-1"}),
+    )
+    .await;
+    let deleted = mutate(
+        &service,
+        "harness_delete",
+        "delete",
+        json!({"sessionId":"session-1"}),
+    )
+    .await;
+    assert_eq!(deleted["outcome"], "committed");
+    assert_eq!(deleted["result"]["deletedSessionIds"], json!(["session-1"]));
+    assert_eq!(
+        mutate(
+            &service,
+            "harness_delete",
+            "delete",
+            json!({"sessionId":"session-1"})
+        )
+        .await,
+        deleted
+    );
+    let page = service
+        .call(
+            "harness_sessions",
+            json!({"profileId":"codex","archived":true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page["sessions"], json!([]));
+    service.close().await;
+}
+
+#[tokio::test]
+async fn native_codex_archives_unloaded_history_and_permanently_removes_it() {
+    if std::env::var("PI_AGENT_CODEX_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let id = "019a0a02-1234-7000-8000-0123456789ab";
+    let dir = root.path().join("sessions/2026/10/09");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("rollout-2026-10-09T00-00-00-{id}.jsonl"));
+    let metadata = json!({"timestamp":"2026-10-09T00:00:00Z","type":"session_meta","payload":{"id":id,"timestamp":"2026-10-09T00:00:00Z","cwd":root.path(),"originator":"codex_cli_rs","cli_version":"0.159.2","source":"cli","model_provider":"openai"}});
+    let message = json!({"timestamp":"2026-10-09T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Temporary native deletion fixture"}]}});
+    std::fs::write(&path, format!("{metadata}\n{message}\n")).unwrap();
+    let config = config(root.path(), "codex");
+    let service = Harnesses::new(
+        pi_agent::harness::config::validate(&config).unwrap(),
+        "epoch".into(),
+    )
+    .unwrap();
+    let before = service
+        .call(
+            "harness_session_info",
+            json!({"profileId":"codex","sessionId":id}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(before["session"]["status"], "notLoaded");
+    assert_eq!(before["session"]["owned"], false);
+    let archived = mutate(
+        &service,
+        "harness_archive",
+        "archive-native-delete",
+        json!({"sessionId":id}),
+    )
+    .await;
+    assert_eq!(archived["outcome"], "committed", "{archived}");
+    assert!(!path.exists());
+    let deleted = mutate(
+        &service,
+        "harness_delete",
+        "delete-native",
+        json!({"sessionId":id}),
+    )
+    .await;
+    assert_eq!(deleted["outcome"], "committed", "{deleted}");
+    assert_eq!(deleted["result"]["deletedSessionIds"], json!([id]));
+    let sessions = service
+        .call(
+            "harness_sessions",
+            json!({"profileId":"codex","archived":true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sessions["sessions"], json!([]));
+    assert!(service
+        .call(
+            "harness_session_info",
+            json!({"profileId":"codex","sessionId":id})
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        mutate(
+            &service,
+            "harness_delete",
+            "delete-native",
+            json!({"sessionId":id})
+        )
+        .await,
+        deleted
+    );
+    service.close().await;
+}
+
+#[tokio::test]
+async fn permanent_deletion_rejects_foreign_spawned_descendants_before_commit() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service(root.path());
+    mutate(
+        &service,
+        "harness_create",
+        "root",
+        json!({"workspaceId":"project"}),
+    )
+    .await;
+    mutate(
+        &service,
+        "harness_rename",
+        "child-fixture",
+        json!({"sessionId":"session-1","name":"fixture:foreign-child"}),
+    )
+    .await;
+    let denied = mutate(
+        &service,
+        "harness_delete",
+        "foreign-tree",
+        json!({"sessionId":"session-1"}),
+    )
+    .await;
+    assert_eq!(denied["outcome"], "not-committed");
+    assert_eq!(denied["code"], "EACCES");
+    let archived = mutate(
+        &service,
+        "harness_archive",
+        "foreign-archive",
+        json!({"sessionId":"session-1"}),
+    )
+    .await;
+    assert_eq!(archived["outcome"], "not-committed");
+    assert_eq!(archived["code"], "EACCES");
+    let root = service
+        .call(
+            "harness_session_info",
+            json!({"profileId":"codex","sessionId":"session-1"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(root["session"]["archived"], false);
+    assert_eq!(root["session"]["owned"], true);
+    service.close().await;
+}

@@ -309,6 +309,7 @@ fn tools() -> Vec<Value> {
         ("harness_session_search", "Search all authorized native session titles or parsed displayed history with explicit capacity limits", vec!["profileId", "query", "mode"]),
         ("harness_rename", "Rename an authorized native session without adopting execution", vec!["profileId", "epoch", "requestId", "sessionId", "name"]),
         ("harness_archive", "Archive an idle session owned by this gateway; preserves native history", vec!["profileId", "epoch", "requestId", "sessionId"]),
+        ("harness_delete", "Permanently delete a native session and its authorized spawned descendants", vec!["profileId", "epoch", "requestId", "sessionId"]),
         ("harness_unarchive", "Restore an archived native session without starting a turn", vec!["profileId", "epoch", "requestId", "sessionId"]),
         (
             "harness_fork",

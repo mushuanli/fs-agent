@@ -295,6 +295,7 @@ fn is_mutation(name: &str) -> bool {
             | "harness_rename"
             | "harness_archive"
             | "harness_unarchive"
+            | "harness_delete"
             | "harness_turn"
             | "harness_interrupt"
             | "harness_respond"

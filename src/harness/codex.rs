@@ -17,11 +17,24 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+pub(super) const SOURCE_KINDS: &[&str] = &[
+    "cli",
+    "vscode",
+    "exec",
+    "appServer",
+    "subAgent",
+    "subAgentReview",
+    "subAgentCompact",
+    "subAgentThreadSpawn",
+    "subAgentOther",
+    "unknown",
+];
+
 pub struct Codex {
     config: ProfileConfig,
     runtime: Option<Arc<crate::projects::runtime::ProjectRuntime>>,
     bridge: Mutex<Option<Arc<Bridge>>>,
-    owned: Mutex<HashSet<String>>,
+    pub(super) owned: Mutex<HashSet<String>>,
     closed: AtomicBool,
 }
 impl Codex {
@@ -89,9 +102,14 @@ impl Codex {
     }
     pub(super) async fn sessions(&self, bridge: &Bridge, args: &Value) -> Result<Value, Error> {
         let limit = args["limit"].as_u64().unwrap_or(25).clamp(1, 100);
-        let result = bridge.call("thread/list", json!({"cursor":args["cursor"],"limit":limit,
-            "archived":args["archived"].as_bool().unwrap_or(false),"sourceKinds":["cli","vscode","exec","appServer","subAgent","subAgentReview","subAgentCompact","subAgentThreadSpawn","subAgentOther","unknown"],
-            "sortKey":"updated_at"})).await?;
+        let result = bridge
+            .call(
+                "thread/list",
+                json!({"cursor":args["cursor"],"limit":limit,
+            "archived":args["archived"].as_bool().unwrap_or(false),"sourceKinds":SOURCE_KINDS,
+            "sortKey":"updated_at"}),
+            )
+            .await?;
         let sessions = result["data"]
             .as_array()
             .ok_or_else(Error::internal)?
@@ -121,7 +139,7 @@ impl Codex {
             "archived":thread["archived"].as_bool().unwrap_or_else(||thread["path"].as_str().is_some_and(|path| path.contains("/archived_sessions/"))),
             "resumable":thread["cwd"].as_str().is_some_and(|cwd| self.authorized(cwd)),"native":metadata})
     }
-    fn authorized(&self, cwd: &str) -> bool {
+    pub(super) fn authorized(&self, cwd: &str) -> bool {
         if let Some(runtime) = &self.runtime {
             return runtime.resolve_cwd(cwd).is_ok();
         }
@@ -149,7 +167,7 @@ impl Codex {
             "harness_create" => self.create(bridge, args).await,
             "harness_resume" => self.resume(bridge, args).await,
             "harness_fork" => self.fork(bridge, args).await,
-            "harness_rename" | "harness_archive" | "harness_unarchive" => {
+            "harness_rename" | "harness_archive" | "harness_unarchive" | "harness_delete" => {
                 self.manage(bridge, name, args).await
             }
             "harness_turn" => self.turn(bridge, args).await,
@@ -196,7 +214,7 @@ impl Codex {
         self.owned.lock().await.insert(id.into());
         Ok(json!({"session":self.session(&result["thread"])}))
     }
-    async fn require_owned(&self, id: &str) -> Result<(), Error> {
+    pub(super) async fn require_owned(&self, id: &str) -> Result<(), Error> {
         if !self.owned.lock().await.contains(id) {
             return Err(Error::forbidden("HARNESS_SESSION_NOT_OWNED"));
         }
@@ -262,6 +280,9 @@ impl Codex {
         }
         let id = string(args, "sessionId")?;
         let thread = self.summary(bridge, id).await?;
+        if name == "harness_delete" {
+            return self.delete_native(bridge, thread).await;
+        }
         let thread = match name {
             "harness_rename" => self.rename_native(bridge, thread, args).await?,
             "harness_archive" => self.archive_native(bridge, thread).await?,
@@ -291,9 +312,10 @@ impl Codex {
     }
     async fn archive_native(&self, bridge: &Bridge, mut thread: Value) -> Result<Value, Error> {
         let id = string(&thread, "id")?;
-        self.require_owned(id).await?;
-        if thread["status"]["type"] != "idle" {
-            return Err(Error::busy());
+        self.archivable(&thread).await?;
+        for archived in [false, true] {
+            self.management_descendants(bridge, id, archived, false)
+                .await?;
         }
         bridge
             .persistent_call("thread/archive", json!({"threadId":id}))
@@ -490,7 +512,7 @@ impl HarnessDriver for Codex {
         json!({"id":self.config.id,"kind":self.config.kind,
             "workspaces":self.config.workspaces.iter().map(|w| json!({"id":w.id})).collect::<Vec<_>>(),
             "projectRuntime":self.config.projects,
-            "capabilities":{"history":true,"create":true,"resume":true,"interrupt":true,"interactions":true,"fork":true,"search":true,"rename":true,"archive":true,"unarchive":true,"attachments":["text","image"]}})
+            "capabilities":{"history":true,"create":true,"resume":true,"interrupt":true,"interactions":true,"fork":true,"search":true,"rename":true,"archive":true,"unarchive":true,"delete":true,"attachments":["text","image"]}})
     }
     fn read<'a>(&'a self, name: &'a str, args: Value) -> BoxFuture<'a, Result<Value, Error>> {
         Box::pin(async move { self.read(name, args).await })

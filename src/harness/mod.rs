@@ -3,6 +3,7 @@ mod attachments;
 mod bridge;
 mod claude;
 mod codex;
+mod codex_delete;
 pub mod config;
 mod driver;
 mod events;

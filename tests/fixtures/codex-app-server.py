@@ -35,7 +35,7 @@ for line in sys.stdin:
         threads[thread_id] = thread
         result = {'thread': thread}
     elif method == 'thread/list':
-        result = {'data': [thread for thread in threads.values() if bool(thread.get('archived')) == bool(params.get('archived'))], 'nextCursor': None}
+        result = {'data': [thread for thread in threads.values() if bool(thread.get('archived')) == bool(params.get('archived')) and (not params.get('ancestorThreadId') or thread.get('spawnedFromId') == params['ancestorThreadId'])], 'nextCursor': None}
     elif method in ('thread/read', 'thread/resume'):
         thread = threads.get(params['threadId'])
         if thread is None:
@@ -50,12 +50,20 @@ for line in sys.stdin:
         result = {'thread': thread}
     elif method == 'thread/name/set':
         threads[params['threadId']]['name'] = params['name']
+        if params['name'] == 'fixture:foreign-child':
+            threads['foreign-child'] = {'id': 'foreign-child', 'cwd': '/unauthorized', 'status': {'type': 'notLoaded'}, 'archived': True, 'spawnedFromId': params['threadId']}
         emit({'method': 'thread/name/updated', 'params': {'threadId': params['threadId'], 'threadName': params['name']}})
     elif method in ('thread/archive', 'thread/unarchive'):
         thread = threads[params['threadId']]
         thread['archived'] = method == 'thread/archive'
+        thread['status'] = {'type': 'notLoaded'} if thread['archived'] else {'type': 'idle'}
         result = {} if thread['archived'] else {'thread': thread}
         emit({'method': 'thread/archived' if thread['archived'] else 'thread/unarchived', 'params': {'threadId': thread['id']}})
+    elif method == 'thread/delete':
+        deleted = [params['threadId']] + [t['id'] for t in threads.values() if t.get('spawnedFromId') == params['threadId']]
+        for thread_id in deleted:
+            threads.pop(thread_id, None)
+            emit({'method': 'thread/deleted', 'params': {'threadId': thread_id}})
     elif method == 'turn/start':
         turn_count += 1
         turn_id = 'turn-' + str(turn_count)
