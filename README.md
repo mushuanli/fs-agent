@@ -128,13 +128,13 @@ MindOS 项目右键菜单选择“启用远程命令”后，File Tools 和 Bash
 
 每个 SeqFile 是可复制的 SQLite 数据库。服务端执行结构化单文件事务，再复用条件文件替换与持久回执；不接受任意 SQL。读取缺失文件不创建文件，父目录需提前创建。只读 export 禁止写入。每文件最多 16 MiB、每批最多 256 项、key 最多 1024 字节，HTTP 请求体仍有独立上限。并发冲突返回 ECONFLICT；unknown 结果使用现有操作查询确认，不自动重放。此接口与 sync 对象库无关，不提供跨 SeqFile 事务。
 
-## Codex 控制中心（MCP 2.0）
+## 原生 harness 控制中心（MCP 2.0）
 
 ### Harness 插件扩展
 
-服务使用编译时注册的 `HarnessPlugin` / `HarnessPlugins` 插件接口。默认注册 Codex；`kind` 由注册表识别，未注册插件在启动验证时拒绝。插件负责原生协议、会话存储读取、进程初始化及统一会话/事件/交互格式，公共服务负责 epoch/requestId、回执、串行修改、项目授权、实例缓存和关闭。项目 launcher 接收插件指定的启动参数，不再固定 Codex 参数。
+服务使用编译时注册的 `HarnessPlugin` / `HarnessPlugins` 插件接口。默认注册 Codex 和 Claude Code；`kind` 由注册表识别，未注册插件在启动验证时拒绝。插件负责原生协议、会话存储读取、进程初始化及统一会话/事件/交互格式，公共服务负责 epoch/requestId、回执、串行修改、项目授权、实例缓存和关闭。项目 launcher 接收插件指定的启动参数，不再固定 Codex 参数。
 
-新增实现可通过 `HarnessPlugins::register` 注册，使用 `State::from_config_with_plugins` 装配；标准二进制的内置插件在注册表默认实现中声明。普通实例与项目实例都通过同一个插件工厂创建，项目实例接收 `ProjectRuntime` 并使用共同目录授权及 launcher。插件是可信的进程内代码，当前不支持动态库加载或外部插件自动发现。Claude Code、DeepSeek 等尚未实现，配置一个 kind 名字不会创建对应驱动。
+新增实现可通过 `HarnessPlugins::register` 注册，使用 `State::from_config_with_plugins` 装配；标准二进制的内置插件在注册表默认实现中声明。普通实例与项目实例都通过同一个插件工厂创建，项目实例接收 `ProjectRuntime` 并使用共同目录授权及 launcher。插件是可信的进程内代码，当前不支持动态库加载或外部插件自动发现。Claude Code 已有独立 SDK 适配；DeepSeek CLI 尚未实现，配置一个 kind 名字不会创建对应驱动。
 
 启动时（日志级别 info 或更详细）输出可复制的 MCP endpoint、serverId、认证方式、凭据来源及实际 API Key；旧 Basic 配置只显示用户名和密码来源。监听通配地址时另外尝试显示默认路由的本机 IP 候选；多网卡、容器、NAT 或代理场景仍需填写客户端实际可达地址。该探测不发送 UDP 数据包，也不发现公网地址。
 
@@ -164,7 +164,7 @@ PI_AGENT_HARNESS_TEST=1 pnpm --filter @itookit/piagent-driver test tests/network
 
 第一项包含原生协议模拟测试；第二项用独立临时 CODEX_HOME 启动真实 Codex，只验证创建/历史，不调用模型，也不读取个人会话；第三项用真实 MCP SDK、Rust HTTP 服务和模拟 Codex 验证完整操作。
 
-server/discover 的 `_meta['itookit/pi-agent']` 返回文件协议版本、同源相对 HTTP 端点、安装 serverId、项目和 harness 支持；piagent_capabilities 返回同一描述并保留旧客户端兼容。客户端优先复用标准发现响应，不根据名字判断服务；该描述是本服务扩展，不是 MCP 标准保证。建议显式配置全局唯一且稳定的 server_id，以识别同一安装的不同访问地址。多个原生 harness 由服务端插件注册表适配，共用这一 MCP 连接；当前内置 Codex。
+server/discover 的 `_meta['itookit/pi-agent']` 返回文件协议版本、同源相对 HTTP 端点、安装 serverId、项目和 harness 支持；piagent_capabilities 返回同一描述并保留旧客户端兼容。客户端优先复用标准发现响应，不根据名字判断服务；该描述是本服务扩展，不是 MCP 标准保证。建议显式配置全局唯一且稳定的 server_id，以识别同一安装的不同访问地址。多个原生 harness 由服务端插件注册表适配，共用这一 MCP 连接；当前内置 Codex 与 Claude Code。
 
 
 ## 目录项目模式
@@ -185,3 +185,51 @@ MCP 提供 project_roots/list/read/register/configure/exec；harness 工具增�
 默认更新模式保留目标独有文件，不传播删除、不穿透附加挂载或 .mindos；镜像删除未开放。
 
 服务曾名为 fs-agent。升级时继续使用原 config.toml、server_id、API Key、projects.root、sync.root 和 harness home；数据目录无需改名。新程序为 pi-agent，MCP 主发现工具为 piagent_capabilities，旧 fsagent_capabilities 保留为兼容别名。文件／项目协议标识、HTTP 授权头和 fs-agent.files／fs-agent.bundle 的规范编码沿用原格式，已有摘要、历史和绑定可以继续使用。
+
+
+### 项目与原生会话搜索
+
+`project_search` 接收 projectId/revision/query/mode（path/content）。发现描述的 fileSearch 仅在隔离执行和 `/usr/bin/rg` 可用时声明；执行使用固定 argv、字面/忽略大小写（支持换行）匹配、只读 pinned 项目视图，无网络和 symlink 跟随，保留嵌套 mount 遮蔽并排除 gitignore、隐藏、私有及原生 home。上限为 100 条、2 MiB 输出/单文件、10 秒、4 并发。无匹配与进程/隔离错误分别返回；取消回收子进程。
+
+Codex 声明 capabilities.search，`harness_session_search` 接收 profileId、可选 projectId/revision、query、mode（title/content）、archived。经授权列表和原生历史解析读取用户/assistant 文本与命令摘要，不递归扫描 home。最多 20 页列表、每会话 64 页历史、16 MiB、100 条、15 秒、2 并发。结果携带原生 session/turn/item 身份；超限 truncated=true，当前无续页。状态保留 statusDetails.activeFlags 和最近 turn 结果；notLoaded/未知枚举不推断已经完成，独立 CLI 的可读历史不代表本服务有控制权。
+
+
+### 原生管理与内联附件
+
+Codex 提供 `harness_rename`、`harness_archive`、`harness_unarchive`，均要求可写授权并使用 epoch/requestId 回执去重。rename 调用 thread/name/set，不 resume；archive 要求本实例持有且原生状态明确 idle，归档后释放所有权；unarchive 核验恢复的原生 cwd，不 resume、不启动 turn。未提供永久删除。
+
+`harness_turn.attachments` 接受最多 5 个内联 text/image：UTF-8 文本每个 64 KiB，PNG/JPEG/WebP 图片解码每个 256 KiB，编码内容总计 512 KiB。拒绝非法名称、二进制文本、宿主路径、远程 URL、其他图片格式和超限内容，在启动 turn 前完成验证。MCP JSON body 上限为 2 MiB，以容纳合法附件的 JSON 转义；其他 JSON 路由仍为 512 KiB。
+
+
+### Claude Code
+
+显式配置已安装的 Claude CLI 和已存在的私有目录；`home` 对应 `CLAUDE_CONFIG_DIR`，不会自动读取未配置的 `~/.claude`。项目实例复用 ProjectLauncher 和 Bubblewrap 的目录、mounts、网络授权：
+
+```toml
+[[harnesses]]
+id = "claude"
+kind = "claude"
+command = "/usr/local/bin/claude"
+home = "/srv/pi-agent/claude-home"
+projects = true
+```
+
+真实验收版本为 Claude Code 2.1.209。控制使用 [Agent SDK 流式输入](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode) 的 stream-json、initialize/control_request/control_response；每个受控会话独立子进程，最多 16 个。新建、恢复、文本/图片附件、中断、工具审批及 AskUserQuestion 转换为统一 harness 接口。使用 manual 权限模式和 stdio 审批通道；不跳过审批。turn 只有收到相同原生 user UUID 的 replay 确认才提交回执；超时或断线结果未知，不自动重发。客户端关闭只释放观察，不中断远端 turn；服务端关闭回收进程组和审批请求。
+
+历史只读解析私有 home 的 `projects/*/*.jsonl`，按实际 cwd 核验项目归属，拒绝链接和越界，不修改原生索引。目录列表检查最多 2048 个目录名称、8192 个文件、16 MiB 元信息及 5 秒；历史每次读取 8 MiB 窗口，返回最多 100 项/2 MiB。真实用户 UUID 定义轮次，多条 assistant 消息保留该身份；工具只返回摘要。恢复使用[原生日志绝对路径](https://code.claude.com/docs/en/sessions)，兼容宿主 cwd 与项目沙箱虚拟 cwd 的差异；恢复前核验整份日志的身份及 cwd，日志上限 16 MiB，超限明确失败；历史读取与恢复验证共用 4 个 blocking 工作槽。搜索共用 100 条/16 MiB/15 秒预算及每会话 64 页上限。
+
+独立 CLI 历史可发现，状态为 notLoaded、owned=false；读取不获得控制权，显式 resume 才建立本服务的独立受控进程，不能接管外部正在运行的进程。Claude 当前未声明 fork/rename/archive/unarchive。新建空会话由原生子进程持有，首条消息写入前不保证重启后可发现；原生 JSONL 落盘可能稍晚于 result 事件，历史刷新会获取随后写入的记录。
+
+```bash
+cargo test --test claude --test project_watch
+cargo build
+python3 tests/real_claude.py
+```
+
+最后一项为安装真实 CLI 后可选的验收：使用临时 home/项目、本地 Anthropic 协议 peer，验证原生审批写文件、图片、独立 CLI 发现及恢复；不访问个人数据或云模型，不代替桌面视觉验收。
+
+### 项目目录变化
+
+发现元数据的 `fileWatch: true` 声明 `project_watch` / `project_unwatch`。请求携带 projectId/revision，可重用返回的 watchId；响应仅为 watchId/version/gap/truncated，不含宿主路径、文件名或正文。Linux inotify 监听 pinned 项目根与 mounts，不跟随链接，不扫描隐藏目录、原生 home 或被挂载遮蔽的目录。外部编辑器、独立 CLI、新目录中的变化均推进版本；目录变动或队列溢出重建监听，溢出报告 gap。
+
+最多 16 个观察，空闲 60 秒后在后续请求清理；客户端关闭发送 unwatch，授权变更/项目移除释放相应观察。建立监听最多 2048 个目录、50000 项及 2 秒，覆盖不足返回 truncated；driver 每 30 秒推进一次部分覆盖版本以补充刷新。旧服务器没有 fileWatch 时不调用新工具。观察按 owner/project/revision 及根目录身份核验，授权失效立即停止读取；没有原生会话的项目仍观察目录。目录变更不表示外部会话正在运行，也不授予执行控制。

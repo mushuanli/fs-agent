@@ -412,3 +412,72 @@ async fn native_branches_keep_parent_identity_and_fork_receipts_prevent_duplicat
     assert_eq!(denied["code"], "EACCES");
     service.close().await;
 }
+
+#[tokio::test]
+async fn native_management_preserves_history_and_never_adopts_or_replays_mutations() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service(root.path());
+    mutate(
+        &service,
+        "harness_create",
+        "create-management",
+        json!({"workspaceId":"project"}),
+    )
+    .await;
+    let args = json!({"sessionId":"session-1","name":"Renamed title"});
+    let renamed = mutate(
+        &service,
+        "harness_rename",
+        "rename-management",
+        args.clone(),
+    )
+    .await;
+    assert_eq!(renamed["result"]["session"]["title"], "Renamed title");
+    assert_eq!(
+        mutate(&service, "harness_rename", "rename-management", args).await,
+        renamed
+    );
+    let outside = mutate(
+        &service,
+        "harness_rename",
+        "outside-management",
+        json!({"sessionId":"foreign","name":"Denied"}),
+    )
+    .await;
+    assert_eq!(outside["code"], "EACCES");
+    let archived = mutate(
+        &service,
+        "harness_archive",
+        "archive-management",
+        json!({"sessionId":"session-1"}),
+    )
+    .await;
+    assert_eq!(archived["result"]["session"]["archived"], true);
+    assert_eq!(archived["result"]["session"]["owned"], false);
+    let page = service
+        .call(
+            "harness_sessions",
+            json!({"profileId":"codex","archived":true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page["sessions"].as_array().unwrap().len(), 1);
+    let restored = mutate(
+        &service,
+        "harness_unarchive",
+        "restore-management",
+        json!({"sessionId":"session-1"}),
+    )
+    .await;
+    assert_eq!(restored["result"]["session"]["archived"], false);
+    assert_eq!(restored["result"]["session"]["owned"], false);
+    let denied = mutate(
+        &service,
+        "harness_archive",
+        "unowned-management",
+        json!({"sessionId":"session-1"}),
+    )
+    .await;
+    assert_eq!(denied["code"], "HARNESS_SESSION_NOT_OWNED");
+    service.close().await;
+}

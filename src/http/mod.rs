@@ -65,7 +65,10 @@ pub fn router(state: Arc<State>, origins: &[String]) -> Result<Router, String> {
         )
         .layer(DefaultBodyLimit::disable());
     Ok(Router::new()
-        .route("/mcp", post(handlers::harness::mcp))
+        .route(
+            "/mcp",
+            post(handlers::harness::mcp).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
         .route(
             "/v1/capabilities",
             get(handlers::capabilities::capabilities),

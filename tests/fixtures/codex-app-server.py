@@ -35,7 +35,7 @@ for line in sys.stdin:
         threads[thread_id] = thread
         result = {'thread': thread}
     elif method == 'thread/list':
-        result = {'data': list(threads.values()), 'nextCursor': None}
+        result = {'data': [thread for thread in threads.values() if bool(thread.get('archived')) == bool(params.get('archived'))], 'nextCursor': None}
     elif method in ('thread/read', 'thread/resume'):
         thread = threads.get(params['threadId'])
         if thread is None:
@@ -50,11 +50,18 @@ for line in sys.stdin:
         result = {'thread': thread}
     elif method == 'thread/name/set':
         threads[params['threadId']]['name'] = params['name']
+        emit({'method': 'thread/name/updated', 'params': {'threadId': params['threadId'], 'threadName': params['name']}})
+    elif method in ('thread/archive', 'thread/unarchive'):
+        thread = threads[params['threadId']]
+        thread['archived'] = method == 'thread/archive'
+        result = {} if thread['archived'] else {'thread': thread}
+        emit({'method': 'thread/archived' if thread['archived'] else 'thread/unarchived', 'params': {'threadId': thread['id']}})
     elif method == 'turn/start':
         turn_count += 1
         turn_id = 'turn-' + str(turn_count)
         result = {'turn': {'id': turn_id}}
         thread_id = params['threadId']
+        threads[thread_id]['status'] = {'type': 'active'}
         if params['input'][0]['text'] == 'approval-before-start-reply':
             awaiting_turn = {'id': request['id'], 'result': result}
             emit({'id': 'approval-early', 'method': 'item/commandExecution/requestApproval', 'params': {'threadId': thread_id, 'turnId': turn_id, 'command': 'echo test'}})
@@ -65,6 +72,7 @@ for line in sys.stdin:
         emit({'id': 'approval-1', 'method': 'item/commandExecution/requestApproval', 'params': {'threadId': thread_id, 'turnId': turn_id, 'command': 'echo test'}})
         continue
     elif method == 'turn/interrupt':
+        threads[params['threadId']]['status'] = {'type': 'idle'}
         emit({'method': 'turn/completed', 'params': {'threadId': params['threadId'], 'turn': {'id': params['turnId'], 'status': 'interrupted'}}})
     elif method == 'fixture/delay':
         time.sleep(0.1)

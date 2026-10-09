@@ -33,9 +33,18 @@ pub async fn call(
                 args["revision"].as_u64().ok_or_else(Error::invalid)?,
             )?;
             state.harness.close_project(id).await;
+            service
+                .watches
+                .lock()
+                .map_err(|_| Error::internal())?
+                .remove_project(id);
             Ok(json!({"forgotten":id}))
         }
         "project_exec" => execute(state, identity, service, args),
+        "project_watch" | "project_unwatch" => {
+            super::watch::call(state, identity, name, args).await
+        }
+        "project_search" => super::search::search(state, identity, args).await,
         _ => Err(Error::unsupported()),
     }
 }
@@ -62,9 +71,20 @@ async fn configure(
     }
     let mounts = serde_json::from_value(args["mounts"].clone()).map_err(|_| Error::invalid())?;
     state.harness.close_project(id).await;
-    Ok(
-        json!({"project":service.configure(state,identity,id,revision,text(&args,"name")?.into(),mounts)?}),
-    )
+    let project = service.configure(
+        state,
+        identity,
+        id,
+        revision,
+        text(&args, "name")?.into(),
+        mounts,
+    )?;
+    service
+        .watches
+        .lock()
+        .map_err(|_| Error::internal())?
+        .remove_project(id);
+    Ok(json!({"project":project}))
 }
 
 fn execute(

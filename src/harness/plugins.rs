@@ -27,6 +27,9 @@ impl Default for HarnessPlugins {
             .entries
             .insert("codex".into(), Arc::new(CodexPlugin));
         plugins
+            .entries
+            .insert("claude".into(), Arc::new(ClaudePlugin));
+        plugins
     }
 }
 
@@ -80,5 +83,25 @@ impl HarnessPlugin for CodexPlugin {
             Some(runtime) => Box::new(Codex::project(profile, runtime)),
             None => Box::new(Codex::new(profile)),
         })
+    }
+}
+
+struct ClaudePlugin;
+impl HarnessPlugin for ClaudePlugin {
+    fn kind(&self) -> &'static str {
+        "claude"
+    }
+    fn validate(&self, profile: &ProfileConfig) -> Result<(), String> {
+        if profile.command == "codex" {
+            return Err("Claude profiles require an explicit Claude CLI command".into());
+        }
+        Ok(())
+    }
+    fn create(
+        &self,
+        profile: ProfileConfig,
+        runtime: Option<Arc<ProjectRuntime>>,
+    ) -> Result<Box<dyn HarnessDriver>, String> {
+        Ok(Box::new(super::claude::Claude::new(profile, runtime)))
     }
 }

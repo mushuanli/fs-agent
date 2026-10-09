@@ -21,3 +21,13 @@ path = "/srv/projects/demo"
 # alias = "demo"
 # path = "/srv/projects/demo"
 # access = "ro"
+
+# Optional Claude Code profile. home is CLAUDE_CONFIG_DIR, never inferred.
+# [[harnesses]]
+# id = "claude-main"
+# kind = "claude"
+# command = "/usr/local/bin/claude"
+# home = "/home/your-user/.claude"
+# [[harnesses.workspaces]]
+# id = "project"
+# path = "/srv/projects/demo"

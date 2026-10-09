@@ -170,7 +170,7 @@ fn capabilities(state: &State) -> Value {
         "fileProtocol":"fs-agent-http-v1","harness":state.harness.enabled(),
         "projects":state.projects.is_some(),"sync":state.sync.is_some(),
         "directorySync":state.projects.is_some() && state.sync.is_some(),
-        "directorySyncVersion":2,"projectProtocol":"fs-agent-project-v1"})
+        "fileWatch":state.projects.is_some(),"fileSearch":state.projects.is_some() && state.execution.ready() && std::path::Path::new("/usr/bin/rg").is_file(),"directorySyncVersion":2,"projectProtocol":"fs-agent-project-v1"})
 }
 
 fn tools() -> Vec<Value> {
@@ -242,6 +242,13 @@ fn tools() -> Vec<Value> {
             "Read the project directory grant and mount policy",
             vec!["projectId"],
         ),
+        ("project_watch", "Observe bounded project directory changes without returning paths or content", vec!["projectId", "revision"]),
+        ("project_unwatch", "Release a project directory observer", vec!["projectId", "revision", "watchId"]),
+        (
+            "project_search",
+            "Search literal paths or text in the pinned read-only project view",
+            vec!["projectId", "revision", "query", "mode"],
+        ),
         (
             "project_register",
             "Register an existing directory or create one child under an authorized parent",
@@ -299,6 +306,10 @@ fn tools() -> Vec<Value> {
             "Read session metadata without loading history or resuming execution",
             vec!["profileId", "sessionId"],
         ),
+        ("harness_session_search", "Search all authorized native session titles or parsed displayed history with explicit capacity limits", vec!["profileId", "query", "mode"]),
+        ("harness_rename", "Rename an authorized native session without adopting execution", vec!["profileId", "epoch", "requestId", "sessionId", "name"]),
+        ("harness_archive", "Archive an idle session owned by this gateway; preserves native history", vec!["profileId", "epoch", "requestId", "sessionId"]),
+        ("harness_unarchive", "Restore an archived native session without starting a turn", vec!["profileId", "epoch", "requestId", "sessionId"]),
         (
             "harness_fork",
             "Create a native branch preserving the source history",
@@ -403,6 +414,14 @@ fn tool(name: &str, description: &str, required: Vec<&str>) -> Value {
     }
     properties.insert("name".into(), json!({"type":"string"}));
     properties.insert(
+        "query".into(),
+        json!({"type":"string","minLength":1,"maxLength":1024}),
+    );
+    properties.insert(
+        "mode".into(),
+        json!({"type":"string","enum":["path","content","title"]}),
+    );
+    properties.insert(
         "args".into(),
         json!({"type":"array","items":{"type":"string"}}),
     );
@@ -418,8 +437,10 @@ fn tool(name: &str, description: &str, required: Vec<&str>) -> Value {
         json!({"type":["string","integer"]}),
     );
     properties.insert("response".into(), json!({"type":"object"}));
+    properties.insert("watchId".into(), json!({"type":"string","maxLength":128}));
+    properties.insert("attachments".into(), json!({"type":"array","maxItems":5,"items":{"type":"object","required":["kind","name","content"],"properties":{"kind":{"enum":["text","image"]},"name":{"type":"string","maxLength":256},"content":{"type":"string","maxLength":524288},"mimeType":{"type":"string"}},"additionalProperties":false}}));
     json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required},
-        "annotations":{"readOnlyHint":matches!(name,"project_sync_directories"|"project_sync_compare"|"project_sync_status"|"piagent_capabilities"|"fsagent_capabilities"|"project_roots"|"project_list"|"project_read"|"harness_profiles"|"harness_sessions"|"harness_session_read"|"harness_session_info"|"harness_events"|"harness_operation"),
+        "annotations":{"readOnlyHint":matches!(name,"harness_session_search"|"project_watch"|"project_unwatch"|"project_search"|"project_sync_directories"|"project_sync_compare"|"project_sync_status"|"piagent_capabilities"|"fsagent_capabilities"|"project_roots"|"project_list"|"project_read"|"harness_profiles"|"harness_sessions"|"harness_session_read"|"harness_session_info"|"harness_events"|"harness_operation"),
         "openWorldHint":true}})
 }
 

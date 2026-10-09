@@ -60,6 +60,9 @@ impl Harnesses {
     pub fn enabled(&self) -> bool {
         !self.profiles.is_empty()
     }
+    pub fn private_homes(&self) -> impl Iterator<Item = &std::path::Path> {
+        self.configs.iter().map(|profile| profile.home.as_path())
+    }
     pub fn profiles(&self) -> Value {
         json!({"epoch":self.epoch,"profiles":self.profiles.values().map(|p| p.driver.descriptor()).collect::<Vec<_>>()})
     }
@@ -289,6 +292,9 @@ fn is_mutation(name: &str) -> bool {
         "harness_create"
             | "harness_resume"
             | "harness_fork"
+            | "harness_rename"
+            | "harness_archive"
+            | "harness_unarchive"
             | "harness_turn"
             | "harness_interrupt"
             | "harness_respond"

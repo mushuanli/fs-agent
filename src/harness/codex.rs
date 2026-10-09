@@ -64,6 +64,7 @@ impl Codex {
     async fn read(&self, name: &str, args: Value) -> Result<Value, Error> {
         let bridge = self.bridge().await?;
         match name {
+            "harness_session_search" => super::search::search(self, &bridge, &args).await,
             "harness_sessions" => self.sessions(&bridge, &args).await,
             "harness_session_read" => self.history(&bridge, &args).await,
             "harness_session_info" => {
@@ -86,7 +87,7 @@ impl Codex {
             _ => Err(Error::unsupported()),
         }
     }
-    async fn sessions(&self, bridge: &Bridge, args: &Value) -> Result<Value, Error> {
+    pub(super) async fn sessions(&self, bridge: &Bridge, args: &Value) -> Result<Value, Error> {
         let limit = args["limit"].as_u64().unwrap_or(25).clamp(1, 100);
         let result = bridge.call("thread/list", json!({"cursor":args["cursor"],"limit":limit,
             "archived":args["archived"].as_bool().unwrap_or(false),"sourceKinds":["cli","vscode","exec","appServer","subAgent","subAgentReview","subAgentCompact","subAgentThreadSpawn","subAgentOther","unknown"],
@@ -96,10 +97,9 @@ impl Codex {
             .ok_or_else(Error::internal)?
             .iter()
             .filter(|thread| {
-                self.runtime.is_none()
-                    || thread["cwd"]
-                        .as_str()
-                        .is_some_and(|cwd| self.authorized(cwd))
+                thread["cwd"]
+                    .as_str()
+                    .is_some_and(|cwd| self.authorized(cwd))
             })
             .map(|thread| self.session(thread))
             .collect::<Vec<_>>();
@@ -111,12 +111,14 @@ impl Codex {
             fields.remove("turns");
         }
         json!({"id":thread["id"],"title":super::presentation::session_title(thread),
-            "cwd":thread["cwd"],"status":thread["status"]["type"],"createdAt":super::presentation::time_ms(&thread["createdAt"]),
+            "cwd":thread["cwd"],"status":thread["status"]["type"],"statusDetails":thread["status"],"createdAt":super::presentation::time_ms(&thread["createdAt"]),
             "updatedAt":super::presentation::time_ms(&thread["updatedAt"]),
             "branchName":if thread["forkedFromId"].is_string() {thread["name"].clone()} else {Value::Null},
             "parentSessionId":thread["forkedFromId"],"forkable":thread["cwd"].as_str().is_some_and(|cwd|self.authorized(cwd)),
             "owned":self.owned.try_lock().is_ok_and(|owned|thread["id"].as_str().is_some_and(|id|owned.contains(id))),
             "activeTurnId":thread["turns"].as_array().and_then(|turns|turns.iter().find(|turn|turn["status"]=="inProgress")).map(|turn|turn["id"].clone()),
+            "lastTurnResult":thread["turns"].as_array().and_then(|turns| turns.last()).and_then(|turn| match turn["status"].as_str() {Some("completed")=>Some("completed"),Some("failed")=>Some("failed"),Some("interrupted")=>Some("cancelled"),_=>None}),
+            "archived":thread["archived"].as_bool().unwrap_or_else(||thread["path"].as_str().is_some_and(|path| path.contains("/archived_sessions/"))),
             "resumable":thread["cwd"].as_str().is_some_and(|cwd| self.authorized(cwd)),"native":metadata})
     }
     fn authorized(&self, cwd: &str) -> bool {
@@ -147,6 +149,9 @@ impl Codex {
             "harness_create" => self.create(bridge, args).await,
             "harness_resume" => self.resume(bridge, args).await,
             "harness_fork" => self.fork(bridge, args).await,
+            "harness_rename" | "harness_archive" | "harness_unarchive" => {
+                self.manage(bridge, name, args).await
+            }
             "harness_turn" => self.turn(bridge, args).await,
             "harness_interrupt" => {
                 self.require_owned(string(args, "sessionId")?).await?;
@@ -204,14 +209,12 @@ impl Codex {
         if prompt.is_empty() || prompt.len() > 128 * 1024 {
             return Err(Error::invalid());
         }
+        let input = super::attachments::input(prompt, &args["attachments"])?;
         if let Some(runtime) = &self.runtime {
             runtime.begin(id)?;
         }
         let result = bridge
-            .persistent_call(
-                "turn/start",
-                json!({"threadId":id,"input":[{"type":"text","text":prompt}]}),
-            )
+            .persistent_call("turn/start", json!({"threadId":id,"input":input}))
             .await;
         if let Err(error) = &result {
             if error.code != "EIO" && error.code != "ETIMEDOUT" {
@@ -249,21 +252,85 @@ impl Codex {
 }
 
 impl Codex {
+    async fn manage(&self, bridge: &Bridge, name: &str, args: &Value) -> Result<Value, Error> {
+        if self
+            .runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.project.access != "rw")
+        {
+            return Err(Error::forbidden("EROFS"));
+        }
+        let id = string(args, "sessionId")?;
+        let thread = self.summary(bridge, id).await?;
+        let thread = match name {
+            "harness_rename" => self.rename_native(bridge, thread, args).await?,
+            "harness_archive" => self.archive_native(bridge, thread).await?,
+            "harness_unarchive" => self.unarchive_native(bridge, id).await?,
+            _ => return Err(Error::unsupported()),
+        };
+        Ok(json!({"session":self.session(&thread)}))
+    }
+    async fn rename_native(
+        &self,
+        bridge: &Bridge,
+        mut thread: Value,
+        args: &Value,
+    ) -> Result<Value, Error> {
+        let title = string(args, "name")?.trim();
+        if title.is_empty() || title.len() > 512 || title.chars().any(char::is_control) {
+            return Err(Error::invalid());
+        }
+        bridge
+            .persistent_call(
+                "thread/name/set",
+                json!({"threadId":thread["id"],"name":title}),
+            )
+            .await?;
+        thread["name"] = json!(title);
+        Ok(thread)
+    }
+    async fn archive_native(&self, bridge: &Bridge, mut thread: Value) -> Result<Value, Error> {
+        let id = string(&thread, "id")?;
+        self.require_owned(id).await?;
+        if thread["status"]["type"] != "idle" {
+            return Err(Error::busy());
+        }
+        bridge
+            .persistent_call("thread/archive", json!({"threadId":id}))
+            .await?;
+        self.owned.lock().await.remove(id);
+        thread["archived"] = json!(true);
+        Ok(thread)
+    }
+    async fn unarchive_native(&self, bridge: &Bridge, id: &str) -> Result<Value, Error> {
+        let result = bridge
+            .persistent_call("thread/unarchive", json!({"threadId":id}))
+            .await?;
+        let mut thread = result["thread"].clone();
+        if thread["id"] != id
+            || !thread["cwd"]
+                .as_str()
+                .is_some_and(|cwd| self.authorized(cwd))
+        {
+            return Err(Error::unavailable());
+        }
+        thread["archived"] = json!(false);
+        Ok(thread)
+    }
     async fn summary(&self, bridge: &Bridge, id: &str) -> Result<Value, Error> {
         let summary = bridge
             .call("thread/read", json!({"threadId":id,"includeTurns":false}))
             .await?;
         let thread = summary["thread"].clone();
-        if self.runtime.is_some()
-            && !thread["cwd"]
-                .as_str()
-                .is_some_and(|cwd| self.authorized(cwd))
+        if !thread["cwd"]
+            .as_str()
+            .is_some_and(|cwd| self.authorized(cwd))
         {
             return Err(Error::forbidden("EACCES"));
         }
         Ok(thread)
     }
-    async fn history(&self, bridge: &Bridge, args: &Value) -> Result<Value, Error> {
+    pub(super) async fn history(&self, bridge: &Bridge, args: &Value) -> Result<Value, Error> {
         let id = string(args, "sessionId")?;
         let mut thread = self.summary(bridge, id).await?;
         let mut page = self.page(bridge, &thread, args).await?;
@@ -423,7 +490,7 @@ impl HarnessDriver for Codex {
         json!({"id":self.config.id,"kind":self.config.kind,
             "workspaces":self.config.workspaces.iter().map(|w| json!({"id":w.id})).collect::<Vec<_>>(),
             "projectRuntime":self.config.projects,
-            "capabilities":{"history":true,"create":true,"resume":true,"interrupt":true,"interactions":true,"fork":true}})
+            "capabilities":{"history":true,"create":true,"resume":true,"interrupt":true,"interactions":true,"fork":true,"search":true,"rename":true,"archive":true,"unarchive":true,"attachments":["text","image"]}})
     }
     fn read<'a>(&'a self, name: &'a str, args: Value) -> BoxFuture<'a, Result<Value, Error>> {
         Box::pin(async move { self.read(name, args).await })
